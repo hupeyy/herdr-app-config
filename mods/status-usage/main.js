@@ -5,7 +5,12 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window, keys, home, readTextFile, shared, setShared } from "herdr";
+import { spaces, agents, terminals, theme, run, window, keys, home, readTextFile, shared, setShared, exec, openOverlay } from "herdr";
+
+// The Resource Manager chip, like Orca's "2.00 GB · >_ 1": the working set of every terminal's
+// process tree plus Herdr's own, and the live terminal count. A click opens mod "resources".
+// mods/resources/snapshot.mjs measures it (a mod cannot import from another mod's folder).
+const RESOURCES_EVERY_MS = 20000;
 
 const URL = "https://api.anthropic.com/api/oauth/usage";
 const CACHE = "usage.claude";
@@ -41,6 +46,31 @@ export default class StatusUsage extends View {
     this.nextAt = 0;
     this.tick(cx);
     cx.timer.every(60000, (cx) => { this.tick(cx); cx.notify(); });
+    this.memory = null;
+    this.measure(cx);
+    cx.timer.every(RESOURCES_EVERY_MS, (cx) => this.measure(cx));
+  }
+
+  measure(cx) {
+    if (this.measuring) return;
+    this.measuring = true;
+    const roots = terminals().filter((x) => x.state === "live" && x.pid).map((x) => ({ a: x.address, p: x.pid }));
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("node", [`${home()}/.config/herdr-app/mods/resources/snapshot.mjs`, JSON.stringify(roots)]);
+        if (r.code === 0) { this.memory = { ws: JSON.parse(r.stdout).total.ws, ptys: roots.length }; cx.notify(); }
+      } catch {} finally { this.measuring = false; }
+    });
+  }
+
+  resources(t) {
+    const m = this.memory;
+    const size = !m ? "…" : m.ws >= 2 ** 30 ? `${(m.ws / 2 ** 30).toFixed(2)} GB` : `${Math.round(m.ws / 2 ** 20)} MB`;
+    return h_flex().id("resources-chip").h(20).px(7).gap(6).items_center().rounded(5).border_1().border_color(t.border)
+      .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Resource Manager")
+      .on_click(() => openOverlay({ mod: "resources", kind: "popup", width: 430, height: 640 }))
+      .child(svg("mods/workspace-chrome/monitor.svg").size(12))
+      .child(`${size} · >_ ${m?.ptys ?? "…"}`);
   }
 
   tick(cx) {
@@ -116,6 +146,7 @@ export default class StatusUsage extends View {
       .child(h_flex().gap(6).items_center().child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
         .when(needs > 0, (el) => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
       .child(div().flex_1())
+      .child(this.resources(t))
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint()));
   }
 }
