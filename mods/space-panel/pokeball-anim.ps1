@@ -3,7 +3,9 @@
 # (pokeball-c<n>.png): it rocks one way on its base, rocks the other way, then bounces once
 # (squash and stretch, a shadow that shrinks with height), and repeats. Frames are 20x30 with the
 # ground near the bottom; nearest-neighbour keeps the pixels.
-param([Parameter(Mandatory)][string]$Dir)
+# Files are named pokeball-v<Version>-...: herdr caches images by path, so a new motion needs new
+# names to show (space-panel's BALL_VERSION passes the version).
+param([Parameter(Mandatory)][string]$Dir, [string]$Version = '3')
 
 Add-Type -AssemblyName System.Drawing
 
@@ -80,11 +82,11 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
 
 $i = 0
 foreach ($f in $frames) {
-    Save-Frame $f[0] $f[1] $f[2] $f[3] (Join-Path $Dir "pokeball-c$i.png")
+    Save-Frame $f[0] $f[1] $f[2] $f[3] (Join-Path $Dir "pokeball-v$Version-c$i.png")
     $i++
 }
-Save-Frame 0 1 1 0 (Join-Path $Dir 'pokeball-still.png')
-# space-panel redraws the frames when this marker's name changes (BALL_VERSION there).
-Set-Content -Path (Join-Path $Dir 'pokeball-anim-3') -Value $i
+Save-Frame 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-still.png")
+# space-panel draws the frames again when this marker is missing.
+Set-Content -Path (Join-Path $Dir "pokeball-v$Version-ready") -Value $i
 $ball.Dispose()
 "$i"

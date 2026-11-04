@@ -59,14 +59,16 @@ async function ensurePokemonIcons() {
 // the script draws the 20x30 frames once and the card swaps them on a timer (see init).
 const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
-const BALL_VERSION = "pokeball-anim-3"; // marker the script writes; a new motion redraws the frames
-const BALL_STILL = `${POKEMON_DIR}/pokeball-still.png`;
-const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-c${tick % BALL_FRAMES}.png`;
+// herdr caches images by path, so the version is in every frame's name: bump it whenever the
+// motion changes, or the cards keep showing the old frames.
+const BALL_VERSION = "3";
+const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
+const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
 
 async function makeBallFrames(dir) {
-  if (await readTextFile(`${dir}/${BALL_VERSION}`).catch(() => null)) return true;
+  if (await readTextFile(`${dir}/pokeball-v${BALL_VERSION}-ready`).catch(() => null)) return true;
   await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir]).catch(() => null);
+    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir, "-Version", BALL_VERSION]).catch(() => null);
   return true;
 }
 
