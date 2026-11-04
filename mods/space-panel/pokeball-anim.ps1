@@ -1,8 +1,8 @@
 # The Poke Ball on space-panel's cards: a red-and-white pixel ball drawn from the map below (no
-# downloaded art), standing still (pokeball-still.png) and, while a dev workspace works, hopping
-# and rocking (pokeball-c<n>.png): a hop tilting left, a squashed landing, a hop tilting right,
-# a landing that rocks it left and right, then a rest. Squash and stretch, a shadow that shrinks
-# with height. Frames are 20x30 with the ground near the bottom; nearest-neighbour keeps pixels.
+# downloaded art), standing still (pokeball-still.png) and, while a dev workspace works
+# (pokeball-c<n>.png): it rocks one way on its base, rocks the other way, then bounces once
+# (squash and stretch, a shadow that shrinks with height), and repeats. Frames are 20x30 with the
+# ground near the bottom; nearest-neighbour keeps the pixels.
 param([Parameter(Mandatory)][string]$Dir)
 
 Add-Type -AssemblyName System.Drawing
@@ -43,17 +43,16 @@ for ($y = 0; $y -lt $size; $y++) {
 
 $W = 20; $H = 30; $ground = 28
 
-# lift (px above ground), x scale, y scale, tilt (degrees)
-$hop = { param($dir) @(
-    @(0, 1.10, 0.90, 0), @(4, 0.90, 1.12, (6 * $dir)), @(8, 0.95, 1.05, (12 * $dir)), @(11, 1, 1, (18 * $dir)),
-    @(12, 1, 1, (20 * $dir)), @(11, 1, 1, (16 * $dir)), @(8, 0.95, 1.05, (10 * $dir)), @(4, 0.90, 1.12, (5 * $dir))
+# lift (px above ground), x scale, y scale, tilt (degrees, about the ball's base)
+$rock = { param($dir) @(
+    @(0, 1, 1, (10 * $dir)), @(0, 1, 1, (20 * $dir)), @(0, 1, 1, (20 * $dir)), @(0, 1, 1, (10 * $dir)), @(0, 1, 1, 0)
 ) }
-# The leading comma keeps a single frame one item: @(@(...)) would flatten it into four numbers.
-$squash = , @(0, 1.28, 0.72, 0)
-$frames = $squash + (& $hop -1) + $squash + (& $hop 1) + @(
-    @(0, 1.22, 0.78, 0), @(0, 1.05, 0.95, -14), @(0, 1, 1, 14), @(0, 1, 1, -8), @(0, 1, 1, 4),
-    @(0, 1, 1, 0), @(0, 1, 1, 0), @(0, 1, 1, 0)
+$bounce = @(
+    @(0, 1.12, 0.88, 0), @(4, 0.90, 1.12, 0), @(8, 0.95, 1.05, 0), @(11, 1, 1, 0), @(12, 1, 1, 0),
+    @(11, 1, 1, 0), @(8, 0.95, 1.05, 0), @(4, 0.90, 1.12, 0), @(0, 1.28, 0.72, 0), @(0, 1.10, 0.90, 0),
+    @(0, 1, 1, 0), @(0, 1, 1, 0)
 )
+$frames = (& $rock -1) + (& $rock 1) + $bounce
 
 function Save-Frame($lift, $sx, $sy, $angle, $path) {
     $out = New-Object System.Drawing.Bitmap $W, $H
@@ -67,14 +66,13 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
         $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int](40 + 60 * $k), 0, 0, 0))
         $g.FillEllipse($brush, [int](($W - $sw) / 2), $ground - 1, $sw, 3)
         $brush.Dispose()
-        # Ball: scaled and tilted about its own centre, its bottom at the lift height.
-        $dh = $size * $sy
-        $cy = $ground - $lift - $dh / 2
+        # Ball: scaled and tilted about its base (bottom centre), which sits at the lift height,
+        # so a rock pivots on the ground like the capture wobble.
         # GDI+ takes singles: PowerShell's own numbers can pick an overload it rejects.
-        $g.TranslateTransform([single]($W / 2), [single]$cy)
+        $g.TranslateTransform([single]($W / 2), [single]($ground - $lift))
         $g.RotateTransform([single]$angle)
         $g.ScaleTransform([single]$sx, [single]$sy)
-        $g.DrawImage($script:ball, [single](-$size / 2), [single](-$size / 2), [single]$size, [single]$size)
+        $g.DrawImage($script:ball, [single](-$size / 2), [single](-$size), [single]$size, [single]$size)
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
@@ -86,5 +84,7 @@ foreach ($f in $frames) {
     $i++
 }
 Save-Frame 0 1 1 0 (Join-Path $Dir 'pokeball-still.png')
+# space-panel redraws the frames when this marker's name changes (BALL_VERSION there).
+Set-Content -Path (Join-Path $Dir 'pokeball-anim-3') -Value $i
 $ball.Dispose()
 "$i"

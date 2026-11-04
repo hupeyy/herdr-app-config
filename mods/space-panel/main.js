@@ -54,16 +54,17 @@ async function ensurePokemonIcons() {
 }
 
 // The card's Poké Ball, a red-and-white pixel ball drawn by pokeball-anim.ps1 (no downloaded
-// art): still when idle; while a dev workspace works it hops tilting left, lands squashed, hops
-// tilting right, lands rocking, then rests, with a shadow. herdr can only spin an svg, so the
-// script draws the 20x30 frames once and the card swaps them on a timer (see init).
+// art): still when idle; while a dev workspace works it rocks one way on its base, rocks the other
+// way, then bounces once (squash, stretch, a shadow), and repeats. herdr can only spin an svg, so
+// the script draws the 20x30 frames once and the card swaps them on a timer (see init).
 const BALL_TICK_MS = 70;
-const BALL_FRAMES = 26;
+const BALL_FRAMES = 22;
+const BALL_VERSION = "pokeball-anim-3"; // marker the script writes; a new motion redraws the frames
 const BALL_STILL = `${POKEMON_DIR}/pokeball-still.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-c${tick % BALL_FRAMES}.png`;
 
 async function makeBallFrames(dir) {
-  if (await readTextFile(`${dir}/pokeball-c${BALL_FRAMES - 1}.png`).catch(() => null)) return true;
+  if (await readTextFile(`${dir}/${BALL_VERSION}`).catch(() => null)) return true;
   await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
     `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir]).catch(() => null);
   return true;

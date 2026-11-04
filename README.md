@@ -91,4 +91,5 @@ from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademark
 Creatures and GAME FREAK. This is an unofficial fan mod.
 
 The Poké Ball is drawn by `mods/space-panel/pokeball-anim.ps1` from a pixel map: still when
-idle, and while a dev workspace works it hops and rocks with squash, stretch and a shadow.
+idle; while a dev workspace works it rocks one way, rocks the other way, then bounces once
+(squash, stretch and a shadow), and repeats.
