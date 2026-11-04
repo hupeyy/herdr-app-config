@@ -56,20 +56,28 @@ async function ensurePokemonIcons() {
   return makeWobbleFrames(dir);
 }
 
-// The capture wobble while a dev workspace works: the Poké Ball tilts left and right on its
-// base, then rests, like the game. herdr can only spin an svg, so pokeball-frames.ps1 draws the
-// tilted copies once and the card swaps them on a timer (see init).
+// The Poké Ball while a dev workspace works, one of two animations (shared "space.ballAnim",
+// switched by clicking a ball): "rock", the capture wobble (tilts left and right on its base,
+// then rests, like the game), or "bounce" (an arc with squash and stretch and a shadow). herdr
+// can only spin an svg, so pokeball-frames.ps1 and pokeball-bounce.ps1 draw the frames once and
+// the card swaps them on a timer (see init). Bounce frames are 30x40: the ball and room above it.
+const BALL_ANIM = "space.ballAnim";
+const BALL_TICK_MS = 70;
 const WOBBLE = [0, -12, -24, -12, 0, 12, 24, 12, 0, 0, 0, 0, 0, 0];
-const WOBBLE_MS = 120;
-const wobbleFrame = (step) => {
-  const angle = WOBBLE[step % WOBBLE.length];
+const BOUNCE_FRAMES = 11;
+const ballAnim = () => (shared(BALL_ANIM) === "rock" ? "rock" : "bounce");
+// Rocking steps every second tick (140 ms), bouncing every tick.
+const ballFrame = (tick) => {
+  if (ballAnim() === "bounce") return `${POKEMON_DIR}/pokeball-b${tick % BOUNCE_FRAMES}.png`;
+  const angle = WOBBLE[Math.floor(tick / 2) % WOBBLE.length];
   return angle ? `${POKEMON_DIR}/pokeball-r${angle}.png` : POKEBALL;
 };
 
 async function makeWobbleFrames(dir) {
-  if (await readTextFile(`${dir}/pokeball-r24.png`).catch(() => null)) return true;
-  await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    `${appHome()}/mods/space-panel/pokeball-frames.ps1`, "-Dir", dir]).catch(() => null);
+  const run = (script) => exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+    `${appHome()}/mods/space-panel/${script}`, "-Dir", dir]).catch(() => null);
+  if (!(await readTextFile(`${dir}/pokeball-r24.png`).catch(() => null))) await run("pokeball-frames.ps1");
+  if (!(await readTextFile(`${dir}/pokeball-b${BOUNCE_FRAMES - 1}.png`).catch(() => null))) await run("pokeball-bounce.ps1");
   return true;
 }
 
@@ -248,12 +256,12 @@ export default class DevWorkspaces extends View {
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
     this.pokemonReady = false;
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
-    // Steps the Poké Ball wobble; redraws only while some dev workspace is working.
-    this.wobbleStep = 0;
+    // Steps the Poké Ball animation; redraws only while some dev workspace is working.
+    this.ballTick = 0;
     this.anyWorking = false;
-    cx.timer.every(WOBBLE_MS, (cx) => {
+    cx.timer.every(BALL_TICK_MS, (cx) => {
       if (!this.anyWorking || !this.pokemonReady) return;
-      this.wobbleStep = (this.wobbleStep + 1) % WOBBLE.length;
+      this.ballTick = (this.ballTick + 1) % (WOBBLE.length * 2 * BOUNCE_FRAMES);
       cx.notify();
     });
     cx.timer.every(WORK_POLL_MS, (cx) => this.pollWork(cx));
@@ -476,13 +484,20 @@ export default class DevWorkspaces extends View {
     const fill = fillOf(t, (shared("space.colors") ?? {})[space.id] ?? "ansi6");
     const icon = (shared("space.icons") ?? {})[space.id];
     // The space's own mark, like Orca's dot: red when an agent needs you; while one works, a Poké
-    // Ball rocking like a capture (a spinner until the art is downloaded); else a still Poké Ball
-    // (the color tile while the art is downloading).
+    // Ball rocking or bouncing (a spinner until the art is downloaded); else a still Poké Ball (the
+    // color tile while the art is downloading). A click on a ball switches rock / bounce.
+    const ball = (img) => div().id(`ball-${space.id}`).w(16).h(20).flex_none().flex().items_end().justify_center().cursor_pointer()
+      .tooltip(`Working animation: ${ballAnim()} (click to switch)`)
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); setShared(BALL_ANIM, ballAnim() === "rock" ? "bounce" : "rock"); cx.notify(); })
+      .child(img);
+    const working = space.status === "working" && this.pokemonReady;
     const mark = space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
-      : space.status === "working" && this.pokemonReady ? image(wobbleFrame(this.wobbleStep)).w(16).h(16).flex_none()
+      : working && ballAnim() === "bounce" ? ball(image(ballFrame(this.ballTick)).w(15).h(20))
+      : working ? ball(image(ballFrame(this.ballTick)).w(16).h(16))
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
-      : this.pokemonReady ? image(POKEBALL).w(16).h(16).flex_none()
+      : this.pokemonReady ? ball(image(POKEBALL).w(16).h(16))
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
         .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color("#ffffff")));
     const latest = rows.filter((r) => r.status).sort((a, b) => (b.at ?? 0) - (a.at ?? 0))[0];
