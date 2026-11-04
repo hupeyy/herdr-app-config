@@ -110,7 +110,7 @@ export default class Resources extends View {
 
   resources(t) {
     const groups = this.groups();
-    return v_flex().id("res-rows").flex_1().min_h(0).overflow_y_scrollbar()
+    return v_flex().id("res-rows").flex_1().min_h(140).overflow_y_scrollbar()
       .children(groups.flatMap((g) => {
         const open = this.open.get(g.id) ?? true; // sessions show at once, as in Orca
         const head = h_flex().id(`g-${g.id}`).h(34).px(12).gap(8).items_center().border_t(1).border_color(t.border)
@@ -170,7 +170,7 @@ export default class Resources extends View {
     return v_flex().flex_1().min_h(0)
       .child(div().px(12).py(8).text_size(12).text_color(t.muted)
         .child("Close dev workspaces you are done with. Their terminals and agents end."))
-      .child(v_flex().id("cleanup-rows").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().id("cleanup-rows").flex_1().min_h(140).overflow_y_scrollbar()
         .children(list.map((c) => {
           const on = !c.blocked && this.picked.has(c.id);
           return h_flex().id(`clean-${c.id}`).min_h(44).px(12).py(6).gap(10).items_center().border_t(1).border_color(t.border)
@@ -212,7 +212,7 @@ export default class Resources extends View {
     const allPanes = panes();
     const where = new Map(spaces().flatMap((sp) => sp.tabs.map((tab) => [tab.id, `${sp.name} / ${tab.name}`])));
     const list = terminals().filter((x) => x.state === "live");
-    return v_flex().id("pty-rows").flex_1().min_h(0).overflow_y_scrollbar()
+    return v_flex().id("pty-rows").flex_1().min_h(140).overflow_y_scrollbar()
       .children(list.map((x) => {
         const pane = allPanes.find((p) => p.terminal === x.address);
         const sum = s.roots[x.address];

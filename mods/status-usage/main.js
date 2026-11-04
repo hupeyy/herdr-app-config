@@ -70,8 +70,10 @@ export default class StatusUsage extends View {
       .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Resource Manager")
       // A popup opens down from the pointer, which cut it off at the window's bottom: open it
       // above the chip instead, right edges lined up, as tall as the space above allows.
-      .on_click((e) => {
-        const p = e?.position;
+      // A click event carries no position; the mouse-down before it does (window-relative).
+      .on_mouse_down("left", (e) => { this.chipPress = e.position; })
+      .on_click(() => {
+        const p = this.chipPress;
         const height = p ? Math.min(640, Math.max(240, p.y - 24)) : 640;
         const at = p ? { x: Math.max(8, p.x - 430 + 60), y: Math.max(8, p.y - height - 16) } : undefined;
         openOverlay({ mod: "resources", kind: "popup", width: 430, height, ...(at ? { at } : {}) });
