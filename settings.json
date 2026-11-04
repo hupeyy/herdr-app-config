@@ -1,7 +1,9 @@
 {
   "zoom": 1,
   "sounds": {
-    "enabled": true
+    "enabled": true,
+    "done": "sounds/windows-notify.mp3",
+    "blocked": "sounds/windows-notify.mp3"
   },
   "font": "Cascadia Mono",
   "font_size": 12,

@@ -14,6 +14,11 @@ git clone https://github.com/hupeyy/herdr-app-config ~/.config/herdr-app   # bef
 On an existing install, clone elsewhere and copy the tracked files in. Then pick the
 `main-tasks` layout (`ctrl-shift-l`, or Settings).
 
+`settings.json` plays `sounds/windows-notify.mp3` for agent alerts. That file is Microsoft's
+Windows 8 notification sound, so it is not in this repo: download it into `sounds/` from
+https://www.myinstants.com/en/instant/windows-8-8-1-notify-system-generic-9559/ or remove the
+`done` / `blocked` keys to use Herdr's own sounds.
+
 ## Layouts
 
 | Layout | What it is |
