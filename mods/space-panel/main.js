@@ -53,18 +53,17 @@ async function ensurePokemonIcons() {
   return makeBallFrames(dir);
 }
 
-// The card's Poké Ball: PokeAPI's poke-ball item sprite (a three-quarter view), downloaded on
-// first use. Still when idle; open when an agent needs input; while a dev workspace works it rocks
-// one way on its base, rocks the other way, then bounces once (squash, stretch, a shadow), and
-// repeats. herdr can only spin an svg, so pokeball-anim.ps1 draws the 24x32 frames once and the
-// card swaps them on a timer (see init). Without the sprite, the script draws a flat pixel ball.
+// The card's Poké Ball: a flat, front-view pixel ball that pokeball-anim.ps1 draws from maps
+// (no downloaded art). Still when idle; half open when an agent needs input; while a dev workspace
+// works it rocks one way on its base, rocks the other way, then bounces once (squash, stretch, a
+// shadow); while an agent's shell runs it spins with orbit streaks. herdr can only spin an svg,
+// so the script draws the 24x32 frames once and the card swaps them on a timer (see init).
+// Earlier looks (the three-quarter PokeAPI sprite) are kept in ./archive.
 const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
-const BALL_SPRITE = `${POKEMON_DIR}/pokeball.png`;
-const BALL_SPRITE_URL = `${SPRITES}/items/poke-ball.png`;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "14"; // 5 open, 6 spin, 7 vertical axis, 8 round, 9 orbit, 10 bolder, 11-13 open looks, 14 half open
+const BALL_VERSION = "15"; // 5-14 the three-quarter sprite looks (see ./archive), 15 flat front view
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
@@ -74,12 +73,8 @@ const spinFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-s${tick % 
 
 async function makeBallFrames(dir) {
   if (await readTextFile(`${dir}/pokeball-v${BALL_VERSION}-ready`).catch(() => null)) return true;
-  const sprite = `${appHome()}/${BALL_SPRITE}`;
-  if (!(await readTextFile(sprite).catch(() => null))) {
-    await exec("curl", ["-sfL", "--retry", "2", "--create-dirs", "-o", sprite, BALL_SPRITE_URL]).catch(() => null);
-  }
   await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir, "-Version", BALL_VERSION, "-Sprite", sprite]).catch(() => null);
+    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir, "-Version", BALL_VERSION]).catch(() => null);
   return true;
 }
 
