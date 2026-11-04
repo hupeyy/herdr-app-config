@@ -64,7 +64,7 @@ const BALL_SPRITE = `${POKEMON_DIR}/pokeball.png`;
 const BALL_SPRITE_URL = `${SPRITES}/items/poke-ball.png`;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "8"; // 5 open ball, 6 shell spin, 7 vertical axis, 8 stays round (the button turns)
+const BALL_VERSION = "9"; // 5 open ball, 6 shell spin, 7 vertical axis, 8 stays round, 9 orbit streaks
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
@@ -489,14 +489,15 @@ export default class DevWorkspaces extends View {
     // The space's own mark, like Orca's dot: the Poké Ball open when an agent needs input (a red
     // dot until the art is ready); rocking and hopping while one works (a spinner until then);
     // spinning with a pause while an agent's shell runs (a terminal icon until then); else
-    // standing still (the color tile until then). Frames are 24x32: ball, room, a shadow.
-    const ball = (img) => div().w(16).h(21).flex_none().flex().items_end().justify_center().child(img);
+    // standing still (the color tile until then). Frames are 24x32 (ball, room, a shadow), spin
+    // frames 30x32 for their orbit streaks; the slot is 20 wide for all, so titles stay put.
+    const ball = (img) => div().w(20).h(21).flex_none().flex().items_end().justify_center().child(img);
     const working = space.status === "working" && this.pokemonReady;
     const mark = space.status === "blocked" && this.pokemonReady ? ball(image(BALL_OPEN).w(16).h(21))
       : space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
       : working ? ball(image(ballFrame(this.ballTick)).w(16).h(21))
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
-      : rows.some((r) => r.shell) && this.pokemonReady ? ball(image(spinFrame(this.ballTick)).w(16).h(21))
+      : rows.some((r) => r.shell) && this.pokemonReady ? ball(image(spinFrame(this.ballTick)).w(20).h(21))
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
       : this.pokemonReady ? ball(image(BALL_STILL).w(16).h(21))
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()

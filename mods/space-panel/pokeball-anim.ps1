@@ -104,7 +104,29 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
 # again. A sphere keeps its round outline as it turns, and a Poke Ball looks the same all round
 # except for its button, so only the button moves: along the band, narrowing toward the edge,
 # hidden while it is round the back. The outline, shading and highlight stay where they are.
+# While it turns, circular motion streaks orbit it on a tilted ring (see Draw-Orbit). Spin frames
+# are 30 wide (the others 24) so the ring fits.
 $spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
+$spinTurns = 12 # the first 12 spin frames turn; the rest are the pause, without streaks
+$SW = 30
+
+# Two short light arcs travelling round a tilted ring at the ball's band, the same way as the
+# button. The half behind the ball is dimmer and drawn under it; the half in front is drawn over
+# it, brightening toward the arc's head. The ring's front is its lower half.
+function Draw-Orbit($g, $phase, $cx, $cy, $rx, $ry, $back) {
+    for ($k = 0; $k -lt 2; $k++) {
+        $t0 = $phase + $k * [Math]::PI
+        for ($j = 0; $j -le 10; $j++) {
+            $t = $t0 + $j * 0.11
+            $front = [Math]::Sin($t) -gt 0
+            if ($front -eq $back) { continue }
+            $a = if ($back) { 90 } else { [Math]::Min(255, 120 + 12 * $j) }
+            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int]$a, 235, 242, 255))
+            $g.FillRectangle($b, [int][Math]::Round($cx + $rx * [Math]::Cos($t)), [int][Math]::Round($cy + $ry * [Math]::Sin($t)), 1, 1)
+            $b.Dispose()
+        }
+    }
+}
 
 # The PokeAPI sprite's button, in the cropped ball's pixels (the sprite is a fixed file): a white
 # cross in a grey ring on the band, left of centre (sprite rows 16-20, columns 10-14).
@@ -132,15 +154,19 @@ if ($haveButton) {
     $phi0 = [Math]::Asin((($px0 + $pw / 2) - $r) / $r)
 }
 
-function Save-Spin($angle, $path) {
-    $out = New-Object System.Drawing.Bitmap $W, $H
+function Save-Spin($angle, $turning, $path) {
+    $out = New-Object System.Drawing.Bitmap $SW, $H
     $g = [System.Drawing.Graphics]::FromImage($out)
     try {
         $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
         $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
-        $g.FillEllipse($shadow, [int](($W - $bw) / 2) + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
-        $x0 = [int](($W - $bw) / 2); $top = $ground - $bh
+        $g.FillEllipse($shadow, [int](($SW - $bw) / 2) + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
+        $x0 = [int](($SW - $bw) / 2); $top = $ground - $bh
+        # The ring: wider than the ball, tilted, at band height; it turns 1.5 times per ball turn.
+        $ocx = $x0 + $bw / 2 - 0.5; $ocy = $top + 11.5; $orx = $bw / 2 + 4.5; $ory = 5
+        $phase = -$angle * [Math]::PI / 180 * 1.5
+        if ($turning) { Draw-Orbit $g $phase $ocx $ocy $orx $ory $true }
         if (-not $script:haveButton) {
             # The flat fallback ball: no button to move, so it simply stands there, round.
             $g.DrawImage($script:ball, $x0, $top, $bw, $bh)
@@ -164,6 +190,7 @@ function Save-Spin($angle, $path) {
                 $g.ResetClip(); $rim.Dispose()
             }
         }
+        if ($turning) { Draw-Orbit $g $phase $ocx $ocy $orx $ory $false }
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
@@ -211,7 +238,7 @@ foreach ($f in $frames) {
 Save-Frame 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-still.png")
 Save-Open (Join-Path $Dir "pokeball-v$Version-open.png")
 $s = 0
-foreach ($angle in $spin) { Save-Spin $angle (Join-Path $Dir "pokeball-v$Version-s$s.png"); $s++ }
+foreach ($angle in $spin) { Save-Spin $angle ($s -lt $spinTurns) (Join-Path $Dir "pokeball-v$Version-s$s.png"); $s++ }
 # space-panel draws the frames again when this marker is missing.
 Set-Content -Path (Join-Path $Dir "pokeball-v$Version-ready") -Value $i
 $ball.Dispose()
