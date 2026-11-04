@@ -186,6 +186,8 @@ const REVIEW_STATE = { APPROVED: ["Approved", "done"], CHANGES_REQUESTED: ["Chan
 
 export function prPage(view, t, cx, url) {
   const entry = load(view, cx, `pr:${url}`, () => fetchPr(url));
+  // The diff loads beside the PR, so Files changed is ready when it is opened.
+  load(view, cx, `diff:${url}`, () => fetchDiff(url));
   const pr = entry.data;
   const back = h_flex().id("pr-back").gap(6).items_center().text_color(t.muted).cursor_pointer()
     .hover((s) => s.text_color(t.foreground))
@@ -230,7 +232,7 @@ export function prPage(view, t, cx, url) {
       .when(count != null, (el) => el.child(div().px(5).rounded(8).bg(t.raised).text_size(11).text_color(t.dim).child(String(count)))))));
 
   const content = tab === "checks" ? checksTab(t, checks, passing, failing)
-    : tab === "files" ? filesTab(view, t, cx, pr)
+    : tab === "files" ? filesTab(view, t, cx, pr, url)
     : conversationTab(view, t, pr, checks, passing, failing);
   return v_flex().id("pr-page").size_full().min_h(0).child(head).child(div().flex_1().min_h(0).child(content));
 }
@@ -292,8 +294,8 @@ function conversationTab(view, t, pr, checks, passing, failing) {
     .child(side);
 }
 
-function filesTab(view, t, cx, pr) {
-  const entry = load(view, cx, `diff:${pr.url}`, () => fetchDiff(pr.url));
+function filesTab(view, t, cx, pr, url) {
+  const entry = load(view, cx, `diff:${url}`, () => fetchDiff(url));
   const files = entry.data ?? [];
   const stats = new Map((pr.files ?? []).map((f) => [f.path, f]));
   const open = files.find((f) => f.path === view.prFile) ?? files[0];

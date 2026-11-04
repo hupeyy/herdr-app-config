@@ -1,7 +1,6 @@
 // Full Jira tickets and GitHub PRs for the detail views: body, comments, reviews, checks and diff.
 
-import { exec } from "herdr";
-import { jira } from "./data.js";
+import { jira, github, graphql } from "./data.js";
 
 // ---- Jira: ADF (Atlassian Document Format) to markdown ----
 
@@ -101,24 +100,56 @@ export async function postComment(key, text) {
 
 // ---- GitHub ----
 
-const PR_FIELDS = "number,title,body,state,isDraft,author,baseRefName,headRefName,updatedAt,reviewDecision,latestReviews,reviewRequests,comments,statusCheckRollup,files,additions,deletions,url";
+// One GraphQL request, shaped like `gh pr view --json` so the page reads the same fields.
+const PR_QUERY = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number title body state isDraft url additions deletions changedFiles
+      baseRefName headRefName updatedAt reviewDecision
+      author { login }
+      latestReviews(first: 50) { nodes { author { login } state body submittedAt } }
+      reviewRequests(first: 50) { nodes { requestedReviewer {
+        ... on User { login } ... on Team { name slug } ... on Bot { login } ... on Mannequin { login } } } }
+      comments(first: 100) { nodes { author { login } body createdAt } }
+      files(first: 100) { nodes { path additions deletions } }
+      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+        ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
+        ... on StatusContext { context state targetUrl }
+      } } } } } }
+    }
+  }
+}`;
 
-async function gh(args) {
-  const r = await exec("gh", args);
-  if (r.code !== 0) throw new Error(r.stderr.trim().slice(0, 200) || `gh exited ${r.code}`);
-  return r.stdout;
-}
+const partsOf = (url) => {
+  const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!m) throw new Error(`Not a pull request URL: ${url}`);
+  return { owner: m[1], name: m[2], number: Number(m[3]) };
+};
 
 export async function fetchPr(url) {
-  const d = JSON.parse(await gh(["pr", "view", url, "--json", PR_FIELDS]));
-  const repo = url.match(/github\.com\/([^/]+\/[^/]+)\/pull/)?.[1] ?? "";
-  return { ...d, repo };
+  const { owner, name, number } = partsOf(url);
+  const pr = (await graphql(PR_QUERY, { owner, name, number })).repository?.pullRequest;
+  if (!pr) throw new Error(`${owner}/${name} #${number} was not found`);
+  const contexts = pr.commits.nodes[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
+  return {
+    ...pr,
+    repo: `${owner}/${name}`,
+    reviewDecision: pr.reviewDecision ?? "",
+    latestReviews: pr.latestReviews.nodes,
+    reviewRequests: pr.reviewRequests.nodes.map((n) => n.requestedReviewer).filter(Boolean),
+    comments: pr.comments.nodes,
+    files: pr.files.nodes,
+    statusCheckRollup: contexts.map((c) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name ?? "" })),
+  };
 }
 
 // The PR's diff, split per file. A file's text is capped so a generated file cannot stall the UI.
+// GraphQL has no diff, so this one call stays on REST.
 const MAX_FILE_LINES = 3000;
 export async function fetchDiff(url) {
-  const text = await gh(["pr", "diff", url, "--color", "never"]);
+  const { owner, name, number } = partsOf(url);
+  const text = await github(`/repos/${owner}/${name}/pulls/${number}`, { accept: "application/vnd.github.diff" });
   const files = [];
   for (const line of text.split("\n")) {
     const head = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);

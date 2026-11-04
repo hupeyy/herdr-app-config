@@ -194,16 +194,43 @@ function toPr(node) {
   };
 }
 
+// GitHub straight over HTTPS with gh's token. Starting gh for each call cost about a second
+// more than the request itself. The token is read once and stays in this module's memory.
+let ghToken = null;
+async function githubToken() {
+  if (ghToken) return ghToken;
+  const r = await exec("gh", ["auth", "token"]);
+  if (r.code !== 0 || !r.stdout.trim()) throw new Error(r.stderr.trim().slice(0, 160) || "gh auth token failed");
+  ghToken = r.stdout.trim();
+  return ghToken;
+}
+
+// accept: a media type that returns text (the diff); otherwise the response is JSON.
+export async function github(path, { query, variables, accept } = {}) {
+  const headers = { Authorization: `bearer ${await githubToken()}`, "User-Agent": "herdr-tasks", Accept: accept ?? "application/json" };
+  if (query) headers["Content-Type"] = "application/json";
+  const response = await fetch(`https://api.github.com${path}`, {
+    method: query ? "POST" : "GET", headers, ...(query ? { body: JSON.stringify({ query, variables }) } : {}),
+  });
+  if (!response.ok) {
+    if (response.status === 401) ghToken = null; // gh may have refreshed it: read it again next time
+    throw new Error(`HTTP ${response.status} ${(await response.text()).slice(0, 160)}`.trim());
+  }
+  return accept ? response.text() : response.json();
+}
+
+export async function graphql(query, variables) {
+  const result = await github("/graphql", { query, variables });
+  if (result.errors?.length) throw new Error(result.errors.map((e) => e.message).join("; ").slice(0, 200));
+  return result.data;
+}
+
 async function fetchPrs() {
   const scope = `is:pr is:open archived:false org:${GH_ORG}`;
-  const r = await exec("gh", [
-    "api", "graphql",
-    "-f", `query=${PR_QUERY}`,
-    "-f", `mine=${scope} author:@me sort:updated-desc`,
-    "-f", `review=${scope} review-requested:@me sort:updated-desc`,
-  ]);
-  if (r.code !== 0) throw new Error(r.stderr.trim().slice(0, 160) || `gh exited ${r.code}`);
-  const data = JSON.parse(r.stdout).data;
+  const data = await graphql(PR_QUERY, {
+    mine: `${scope} author:@me sort:updated-desc`,
+    review: `${scope} review-requested:@me sort:updated-desc`,
+  });
   return { mine: data.mine.nodes.map(toPr), review: data.review.nodes.map(toPr) };
 }
 
