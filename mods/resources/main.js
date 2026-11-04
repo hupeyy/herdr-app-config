@@ -245,7 +245,9 @@ export default class Resources extends View {
       .on_click((_e, cx) => { this.tab = id; this.confirm = null; cx.notify(); })
       .child(svg(ICON(icon)).size(12)).child(label);
     const cpuAll = s ? Object.entries(s.roots).reduce((acc, [k, v]) => acc + this.cpu(k, v), this.cpu("herdr", s.herdr)) : 0;
-    return v_flex().id("resource-manager").size_full().min_h(0).bg(t.popover).text_size(12.5)
+    // A popup sizes to its content: the chip passes the height it planned for, and this fills it.
+    const height = props()?.height;
+    return v_flex().id("resource-manager").size_full().min_h(0).when(Boolean(height), (el) => el.h(height)).bg(t.popover).text_size(12.5)
       .on_key_down((e, cx) => { if (e.key === "escape") { closeOverlay(props()?.overlay); cx.stop_propagation(); } })
       .child(h_flex().h(42).px(12).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
         .child(svg(ICON("monitor")).size(14).text_color(t.muted))

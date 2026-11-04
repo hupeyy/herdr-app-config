@@ -68,15 +68,16 @@ export default class StatusUsage extends View {
     const size = !m ? "…" : m.ws >= 2 ** 30 ? `${(m.ws / 2 ** 30).toFixed(2)} GB` : `${Math.round(m.ws / 2 ** 20)} MB`;
     return h_flex().id("resources-chip").h(20).px(7).gap(6).items_center().rounded(5).border_1().border_color(t.border)
       .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Resource Manager")
-      // A popup opens down from the pointer, which cut it off at the window's bottom: open it
-      // above the chip instead, right edges lined up, as tall as the space above allows.
-      // A click event carries no position; the mouse-down before it does (window-relative).
-      .on_mouse_down("left", (e) => { this.chipPress = e.position; })
+      // The panel sits on the chip, like Orca's: its bottom 6 px above the chip, right edges lined
+      // up. A popup opens down from the pointer and sizes to its content, so the panel is placed
+      // by its top left and told its height (props.height) to fill. A click event carries no
+      // position; the mouse-down before it carries the chip's bounds (window-relative).
+      .on_mouse_down("left", (e) => { this.chipBounds = e.bounds ?? null; })
       .on_click(() => {
-        const p = this.chipPress;
-        const height = p ? Math.min(640, Math.max(240, p.y - 24)) : 640;
-        const at = p ? { x: Math.max(8, p.x - 430 + 60), y: Math.max(8, p.y - height - 16) } : undefined;
-        openOverlay({ mod: "resources", kind: "popup", width: 430, height, ...(at ? { at } : {}) });
+        const b = this.chipBounds;
+        const height = b ? Math.min(640, Math.max(240, b.y - 14)) : 640;
+        const at = b ? { x: Math.max(8, b.x + b.width - 430), y: Math.max(8, b.y - 6 - height) } : undefined;
+        openOverlay({ mod: "resources", kind: "popup", width: 430, height, props: { height }, ...(at ? { at } : {}) });
       })
       .child(svg("mods/workspace-chrome/monitor.svg").size(12))
       .child(`${size} · >_ ${m?.ptys ?? "…"}`);
