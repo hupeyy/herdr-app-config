@@ -15,6 +15,7 @@
 
 /mods/*
 !/mods/
+!/mods/agent-view/
 !/mods/agents-space/
 !/mods/file-icons/
 !/mods/file-view/

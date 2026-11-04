@@ -100,26 +100,47 @@ function toTicket(issue, base, me) {
   };
 }
 
-// The board's columns and every ticket in its active sprint (a page holds at most 100).
+// The board's columns and every ticket in its active sprint, in one round of parallel calls.
+// REST beat Jira's GraphQL here: GraphQL pages hold 50 tickets and need the previous page's
+// cursor, so a 147-ticket sprint took three rounds in a row. The sprint ids and ticket count of
+// the last refresh (shared snapshot "jiraPlan") let every page start before the sprint list
+// answers; a new sprint or extra pages are fetched after it.
+const PAGE = 100;
+let myAccountId = null;
+const sprintPage = (id, at) => jira(`/rest/agile/1.0/sprint/${id}/issue?fields=${FIELDS}&maxResults=${PAGE}&startAt=${at}`);
+const pageStarts = (total) => Array.from({ length: Math.max(1, Math.ceil(total / PAGE)) }, (_, i) => i * PAGE);
+
 async function fetchJira() {
   const config = await jiraConfig();
+  myAccountId ??= snapshot()?.jiraMe ?? null;
+  const early = new Map((snapshot()?.jiraPlan ?? []).map((s) =>
+    [s.id, pageStarts(s.total).map((at) => sprintPage(s.id, at).catch(() => null))]));
   const [me, board, sprints] = await Promise.all([
-    jira("/rest/api/3/myself"),
+    myAccountId ? null : jira("/rest/api/3/myself"),
     jira(`/rest/agile/1.0/board/${BOARD_ID}/configuration`),
     jira(`/rest/agile/1.0/board/${BOARD_ID}/sprint?state=active`),
   ]);
+  if (me) myAccountId = me.accountId;
   const columns = board.columnConfig.columns
     .filter((c) => c.statuses.length)
     .map((c) => ({ name: c.name, statusIds: c.statuses.map((x) => x.id) }));
-  const tickets = [];
-  for (const sprint of sprints.values ?? []) {
-    for (let at = 0; ; at += 100) {
-      const page = await jira(`/rest/agile/1.0/sprint/${sprint.id}/issue?fields=${FIELDS}&maxResults=100&startAt=${at}`);
-      tickets.push(...page.issues.map((i) => toTicket(i, config.base, me.accountId)));
-      if (!page.issues.length || at + page.issues.length >= page.total) break;
-    }
-  }
-  return { tickets, columns, sprint: (sprints.values ?? []).map((x) => x.name).join(", ") };
+  const plan = await Promise.all((sprints.values ?? []).map(async (sprint) => {
+    let pages = await Promise.all(early.get(sprint.id) ?? [sprintPage(sprint.id, 0)]);
+    if (pages.some((p) => !p)) pages = [await sprintPage(sprint.id, 0)]; // an early page failed: start over
+    const total = pages[0].total;
+    const more = pageStarts(total).slice(pages.length);
+    pages = [...pages, ...(await Promise.all(more.map((at) => sprintPage(sprint.id, at))))];
+    return { id: sprint.id, total, issues: pages.flatMap((p) => p.issues) };
+  }));
+  // A ticket can shift pages between two parallel requests: keep each key once.
+  const seen = new Set();
+  const tickets = plan.flatMap((s) => s.issues)
+    .filter((i) => !seen.has(i.key) && seen.add(i.key))
+    .map((i) => toTicket(i, config.base, myAccountId));
+  return {
+    tickets, columns, sprint: (sprints.values ?? []).map((x) => x.name).join(", "),
+    plan: plan.map(({ id, total }) => ({ id, total })), me: myAccountId,
+  };
 }
 
 // ---- Status moves: optimistic, with rollback ----
@@ -253,6 +274,8 @@ export async function refresh({ force = false } = {}) {
     tickets: jiraData?.tickets ?? last?.tickets ?? [],
     columns: jiraData?.columns ?? last?.columns ?? [],
     sprint: jiraData?.sprint ?? last?.sprint ?? "",
+    jiraPlan: jiraData?.plan ?? last?.jiraPlan ?? [],
+    jiraMe: jiraData?.me ?? last?.jiraMe ?? null,
     mine: prs?.mine ?? last?.mine ?? [],
     review: prs?.review ?? last?.review ?? [],
     errors,

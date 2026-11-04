@@ -18,6 +18,9 @@ const isLocked = (id) => Boolean((shared(LOCKED) ?? {})[id]);
 // A confirmed tab move, posted by the confirm popup (its own instance) to the sidebar.
 const MOVE_REQUEST = "space-panel.move";
 const DRAG_START_PX = 6;
+const AGENT_POLL_MS = 5000;
+// { paneId: agentId } written by each agent-view tab, so a click focuses an open one.
+const AGENT_TABS = "agent.tabs";
 // Tickets and PRs the dev workspace's Claude sessions work on (see pollWork).
 const WORK = "space.work";
 const WORK_POLL_MS = 20000;
@@ -180,6 +183,9 @@ export default class DevWorkspaces extends View {
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
     cx.timer.every(WORK_POLL_MS, (cx) => this.pollWork(cx));
     this.pollWork(cx);
+    this.subagents = new Map(); // claude session id -> its subagents (scan-agents.mjs)
+    cx.timer.every(AGENT_POLL_MS, (cx) => this.pollAgents(cx));
+    this.pollAgents(cx);
   }
 
   // Only agents that are not working can be hiding a running shell, so skip the scan when none is.
@@ -205,6 +211,32 @@ export default class DevWorkspaces extends View {
       .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); })
       .child(svg(ICON(iconName)).size(13))
       .when(count > 1, (el) => el.child(div().text_size(10).font_semibold().text_color(t.muted).child(String(count))));
+  }
+
+  // Subagents run inside their Claude process, so herdr has no terminal for them; Claude Code's
+  // transcripts beside each session say which run and what they do (scan-agents.mjs).
+  pollAgents(cx) {
+    if (this.agentScan) return;
+    const sessions = [...new Set(terminals().map((x) => x.labels?.["claude.session"]).filter(Boolean))];
+    if (!sessions.length) { if (this.subagents.size) { this.subagents = new Map(); cx.notify(); } return; }
+    this.agentScan = true;
+    cx.spawn(async (cx) => {
+      try {
+        const res = await exec("node", [`${home()}/.config/herdr-app/mods/space-panel/scan-agents.mjs`, ...sessions]);
+        const next = new Map(Object.entries(JSON.parse(res.stdout || "{}")).filter(([, list]) => list.length));
+        if (JSON.stringify([...next]) !== JSON.stringify([...this.subagents])) { this.subagents = next; cx.notify(); }
+      } catch {} finally { this.agentScan = false; }
+    });
+  }
+
+  // A subagent opens as a tab in its dev workspace (mod agent-view); a second click focuses it.
+  openAgent(space, a) {
+    run("space.select", { id: space.id });
+    const paneId = Object.entries(shared(AGENT_TABS) ?? {}).find(([, id]) => id === a.id)?.[0];
+    const pane = paneId ? panes().find((p) => p.pane === paneId) : null;
+    if (pane) { run("tab.select", { id: pane.tab }); run("pane.focus", { pane: pane.pane }); return; }
+    run("tab.new", { space: space.id, mod: "agent-view", name: (a.description || a.type).slice(0, 40),
+      props: { path: a.path, id: a.id, type: a.type, description: a.description } });
   }
 
   // Each live Claude session's tickets and PRs (scan-work.mjs reads its transcript), filed under
@@ -274,6 +306,15 @@ export default class DevWorkspaces extends View {
     };
     const rows = [];
     const addKids = (address, depth) => {
+      // The session's own subagents (Claude's Agent tool, inside its process; see pollAgents).
+      const session = byAddress.get(address)?.labels?.["claude.session"];
+      for (const a of (session && this.subagents.get(session)) || []) {
+        rows.push({
+          id: `agent-${a.id}`, depth, status: a.running ? "working" : "done", program: CLAUDE,
+          name: a.description || a.type, msg: a.running ? a.activity : `${a.type}, finished`, at: a.at,
+          focused: false, onClick: () => this.openAgent(space, a),
+        });
+      }
       for (const k of all.filter((x) => x.parent === address && x.state === "live")) {
         const pane = mine.find((p) => p.terminal === k.address);
         rows.push({
@@ -291,7 +332,7 @@ export default class DevWorkspaces extends View {
       const agent = Boolean(pane.program?.agent);
       return {
         id: `pane-${pane.pane}`, depth, status: agent ? statusOf(raw, pane.status) : null,
-        program: pane.mod === "file-view" ? fileProgram(pane, label, ctx.light) : pane.program,
+        program: pane.mod === "file-view" ? fileProgram(pane, label, ctx.light) : pane.mod === "agent-view" ? CLAUDE : pane.program,
         name: label, msg: agent ? msgOf(raw) : basename(pane.cwd ?? ""), at: agent ? raw?.status_ms : null,
         shell: pane.terminal ? this.shells.get(pane.terminal) : null,
         mark: pane.mod === "file-view" ? (shared("file.tabs") ?? {})[pane.pane]?.mark ?? null : null,
