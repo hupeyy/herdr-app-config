@@ -90,8 +90,8 @@ menu icons from [PokeAPI/sprites](https://github.com/PokeAPI/sprites), names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
 Creatures and GAME FREAK. This is an unofficial fan mod.
 
-The Poké Ball is a flat, front-view pixel ball drawn from maps in
-`mods/space-panel/pokeball-anim.ps1`, after the classic sprite: still when idle, half open when
+The Poké Ball is the classic 12-pixel sprite (seen from a little above), drawn from maps in
+`mods/space-panel/pokeball-anim.ps1`: still when idle, half open when
 an agent needs input, rocking one way, the other way, then bouncing while an agent works, and
 spinning on its vertical axis with circular motion streaks while an agent's shell runs. Earlier
-looks (the three-quarter PokeAPI sprite) are kept in `mods/space-panel/archive`.
+looks (a flat front view, the three-quarter PokeAPI sprite) are kept in `mods/space-panel/archive`.

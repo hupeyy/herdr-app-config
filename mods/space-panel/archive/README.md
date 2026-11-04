@@ -5,6 +5,7 @@ and in git history so any can come back.
 
 | Look | Where |
 |---|---|
+| Flat front view, 16 px, band straight across (v15) | `pokeball-anim-flat-front.ps1` (commit `bb92025`) |
 | Three-quarter PokeAPI sprite, open ball modelled in 3D (lid turns about the hinge opposite the button) | `pokeball-anim-isometric.ps1` |
 | Three-quarter PokeAPI sprite, half-open lid tipped flat on screen | `pokeball-anim-isometric-tilted-lid.ps1` (commit `f50e862`) |
 | Three-quarter sprite, lid swung far back on a hinge | commit `3a6c632` |

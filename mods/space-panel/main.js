@@ -63,7 +63,7 @@ const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "15"; // 5-14 the three-quarter sprite looks (see ./archive), 15 flat front view
+const BALL_VERSION = "16"; // 5-15 earlier looks (see ./archive), 16 the classic 12-pixel sprite
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;

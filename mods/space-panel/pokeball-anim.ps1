@@ -1,20 +1,21 @@
-# The Poké Ball on space-panel's cards: a flat, front-view pixel ball drawn from the maps below,
-# after the classic sprite (red top with a highlight, black band, white button, white bottom).
+# The Poké Ball on space-panel's cards, pixel for pixel after the classic 12-pixel sprite: seen
+# from a little above, so the band curves down and the button sits low on the front.
 #   pokeball-v<V>-still.png   idle
 #   pokeball-v<V>-c<n>.png    an agent works: rocks one way, rocks the other way, bounces once
 #   pokeball-v<V>-s<n>.png    an agent's shell runs: spins on its vertical axis, orbit streaks
-#   pokeball-v<V>-open.png    an agent needs input: half open, lid tipped back, dark mouth
-# Frames are 24x32 (spin frames 30x32) with the ground near the bottom; nearest-neighbour scaling
+#   pokeball-v<V>-open.png    an agent needs input: half open, a black mouth under the lid
+# Frames are 18x24 (spin frames 23x24) with the ground near the bottom; nearest-neighbour scaling
 # keeps the pixels. Files are named pokeball-v<Version>-...: herdr caches images by path, so a new
 # look needs new names (space-panel's BALL_VERSION passes the version). Earlier looks: ./archive.
-param([Parameter(Mandatory)][string]$Dir, [string]$Version = '15')
+param([Parameter(Mandatory)][string]$Dir, [string]$Version = '16')
 
 Add-Type -AssemblyName System.Drawing
 
-# K outline, R red, D dark red, H highlight, P pink highlight, W white, G grey, S dark grey
+# The sprite's own colours. K outline, R red, D dark red, P pink highlight, W white, L light grey,
+# A inside of the lid, G shade inside the ball.
 $palette = @{
-    'K' = @(16, 16, 16); 'R' = @(224, 20, 28); 'D' = @(152, 8, 20); 'H' = @(255, 255, 255); 'P' = @(255, 150, 150)
-    'W' = @(248, 248, 248); 'G' = @(184, 184, 184); 'S' = @(112, 112, 112)
+    'K' = @(0, 0, 0); 'R' = @(254, 0, 0); 'D' = @(180, 0, 1); 'P' = @(254, 104, 105); 'W' = @(254, 254, 254)
+    'L' = @(180, 180, 180); 'A' = @(162, 162, 162); 'G' = @(139, 139, 139)
 }
 function Map-Bitmap($rows) {
     $bmp = New-Object System.Drawing.Bitmap $rows[0].Length, $rows.Count
@@ -27,49 +28,61 @@ function Map-Bitmap($rows) {
     return $bmp
 }
 
-# Closed, front view: the button is a white centre in a black ring on the band.
 $closed = @(
-    '.....KKKKKK.....',
-    '...KKRRRRRRKK...',
-    '..KRRRRRRRRRRK..',
-    '.KRRHHRRRRRRRRK.',
-    '.KRHPRRRRRRRRDK.',
-    'KRRHRRRRRRRRRDDK',
-    'KRRRRKKKKKKRDDDK',
-    'KKKKKKWWWWKKKKKK',
-    'KWWWWKWWWGKWWGGK',
-    'KWWWWKKKKKKWWGGK',
-    'KWWWWWWWWWWWGGGK',
-    '.KWWWWWWWWWWGGK.',
-    '.KWWWWWWWWWGGGK.',
-    '..KWWWWWWGGGGK..',
-    '...KKGGGGGGKK...',
-    '.....KKKKKK.....'
+    '....KKKK....',
+    '..KKRDDDKK..',
+    '.KRRPRDDDDK.',
+    '.KRPWPRRDDK.',
+    'KRRRPRRRDDDK',
+    'KRRRRKKDDDDK',
+    'KKRRKWWKDDKK',
+    'KWKKKWWKKKLK',
+    '.KWWWKKLLLKK',
+    '.KLWWWWLLLK.',
+    '..KKLLLLKKK.',
+    '....KKKK....'
 )
-# Half open: the lid tipped back (its dark red underside showing), a black mouth with a white rim.
 $halfOpen = @(
-    '.....KKKKKK.....',
-    '...KKRRRRRRKK...',
-    '..KRRHHRRRRRRK..',
-    '.KRRHPRRRRRRDDK.',
-    '.KRRRRRRRRRRDDK.',
-    'KKDDDDDDDDDDDDKK',
-    'KWKKKKKKKKKKKKGK',
-    'KWKKKKKKKKKKKSGK',
-    'KWWKKKKKKKKKSGGK',
-    'KWWWKKKKKKKSGGGK',
-    'KWWWWWWWWWWWGGGK',
-    '.KWWWWWWWWWWGGK.',
-    '.KWWWWWWWWWGGGK.',
-    '..KWWWWWWGGGGK..',
-    '...KKGGGGGGKK...',
-    '.....KKKKKK.....'
+    '....KKKK....',
+    '..KKWWDDKK..',
+    '.KWWRDDDDDK.',
+    '.KRRRKKDDDK.',
+    'KRRKKWWKKDDK',
+    'KRKAGKKGGKDK',
+    'KKAKKKKKKGK.',
+    'KLKKKKKKKKLK',
+    'KWKKKKKKKKLK',
+    '.KWWKKKKWLK.',
+    '.KLWWWLLLLK.',
+    '..KKLLLLKK..',
+    '....KKKK....'
+)
+# For the spin: the ball without its button (the band straight through), and the button itself.
+$bare = @(
+    '....KKKK....',
+    '..KKRDDDKK..',
+    '.KRRPRDDDDK.',
+    '.KRPWPRRDDK.',
+    'KRRRPRRRDDDK',
+    'KRRRRRRDDDDK',
+    'KKRRRRDDDDKK',
+    'KWKKKKKKKKLK',
+    '.KWWWWWLLLKK',
+    '.KLWWWWLLLK.',
+    '..KKLLLLKKK.',
+    '....KKKK....'
+)
+$button = @(
+    '.KK.',
+    'KWWK',
+    'KWWK',
+    '.KK.'
 )
 $ball = Map-Bitmap $closed
 $open = Map-Bitmap $halfOpen
 $bw = $ball.Width; $bh = $ball.Height
 
-$W = 24; $H = 32; $ground = 30
+$W = 18; $H = 24; $ground = 22
 
 # ---- Working: rock one way, rock the other way, bounce once ----
 # lift (px above ground), x scale, y scale, tilt (degrees, about the ball's base)
@@ -77,8 +90,8 @@ $rock = { param($dir) @(
     @(0, 1, 1, (10 * $dir)), @(0, 1, 1, (20 * $dir)), @(0, 1, 1, (20 * $dir)), @(0, 1, 1, (10 * $dir)), @(0, 1, 1, 0)
 ) }
 $bounce = @(
-    @(0, 1.12, 0.88, 0), @(4, 0.90, 1.12, 0), @(8, 0.95, 1.05, 0), @(11, 1, 1, 0), @(12, 1, 1, 0),
-    @(11, 1, 1, 0), @(8, 0.95, 1.05, 0), @(4, 0.90, 1.12, 0), @(0, 1.28, 0.72, 0), @(0, 1.10, 0.90, 0),
+    @(0, 1.12, 0.88, 0), @(3, 0.90, 1.12, 0), @(6, 0.95, 1.05, 0), @(8, 1, 1, 0), @(9, 1, 1, 0),
+    @(8, 1, 1, 0), @(6, 0.95, 1.05, 0), @(3, 0.90, 1.12, 0), @(0, 1.28, 0.72, 0), @(0, 1.10, 0.90, 0),
     @(0, 1, 1, 0), @(0, 1, 1, 0)
 )
 $frames = (& $rock -1) + (& $rock 1) + $bounce
@@ -90,7 +103,7 @@ function Save-Frame($img, $lift, $sx, $sy, $angle, $path) {
         $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
         # Shadow: wide and dark on the ground, small and faint at the top of a hop.
-        $k = 1 - ($lift / 16)
+        $k = 1 - ($lift / 12)
         $sw = [int][Math]::Round($bw * (0.55 + 0.45 * $k) * [Math]::Max(1, $sx))
         $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int](40 + 60 * $k), 0, 0, 0))
         $g.FillEllipse($brush, [int](($W - $sw) / 2), $ground - 1, $sw, 3)
@@ -101,7 +114,7 @@ function Save-Frame($img, $lift, $sx, $sy, $angle, $path) {
         $g.TranslateTransform([single]($W / 2), [single]($ground - $lift))
         $g.RotateTransform([single]$angle)
         $g.ScaleTransform([single]$sx, [single]$sy)
-        $g.DrawImage($img, [single](-$bw / 2), [single](-$bh), [single]$bw, [single]$bh)
+        $g.DrawImage($img, [single](-$img.Width / 2), [single](-$img.Height), [single]$img.Width, [single]$img.Height)
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
@@ -109,21 +122,15 @@ function Save-Frame($img, $lift, $sx, $sy, $angle, $path) {
 
 # ---- Shell: spin on the vertical axis, with circular motion streaks ----
 # A sphere keeps its round outline as it turns, and the ball looks the same all round except for
-# its button, so only the button moves: along the band, narrowing toward the edge, hidden round
-# the back. Spin frames are 30 wide so the streaks' ring fits.
+# its button, so only the button moves: along the band (which curves down to the front, as the
+# ball is seen from above), narrowing toward the edge, hidden round the back. Spin frames are 23
+# wide so the streaks' ring fits.
 $spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
 $spinTurns = 12 # the first 12 spin frames turn; the rest are the pause, without streaks
-$SW = 30
-# The button as drawn on the closed map: its ring spans columns 5-10, rows 6-9.
-$px0 = 5; $py0 = 6; $pw = 6; $ph = 4
-$patch = New-Object System.Drawing.Bitmap $pw, $ph
-for ($x = 0; $x -lt $pw; $x++) { for ($y = 0; $y -lt $ph; $y++) { $patch.SetPixel($x, $y, $ball.GetPixel($px0 + $x, $py0 + $y)) } }
-# The ball without its button: red above the band, the band straight across, white below it.
-$plain = $ball.Clone()
-$red = $ball.GetPixel(4, 6); $band = $ball.GetPixel(0, 7); $white = $ball.GetPixel(2, 8)
-for ($x = $px0; $x -lt $px0 + $pw; $x++) {
-    $plain.SetPixel($x, 6, $red); $plain.SetPixel($x, 7, $band); $plain.SetPixel($x, 8, $white); $plain.SetPixel($x, 9, $white)
-}
+$SW = 23
+$plain = Map-Bitmap $bare
+$patch = Map-Bitmap $button
+$pw = $patch.Width; $ph = $patch.Height
 $r = $bw / 2
 
 # Two light arcs travelling round a tilted ring at the band, the same way as the button. The half
@@ -158,7 +165,7 @@ function Save-Spin($angle, $turning, $path) {
         $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
         $g.FillEllipse($shadow, $x0 + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
         # The ring: wider than the ball, tilted, at the band; it turns 1.5 times per ball turn.
-        $ocx = $x0 + $bw / 2 - 0.5; $ocy = $top + 7.5; $orx = $bw / 2 + 4.5; $ory = 5
+        $ocx = $x0 + $bw / 2 - 0.5; $ocy = $top + 7; $orx = $bw / 2 + 4.5; $ory = 4
         $phase = -$angle * [Math]::PI / 180 * 1.5
         if ($turning) { Draw-Orbit $g $phase $ocx $ocy $orx $ory $true }
         $g.DrawImage($script:plain, $x0, $top, $bw, $bh)
@@ -166,13 +173,15 @@ function Save-Spin($angle, $turning, $path) {
         $facing = [Math]::Cos($phi)
         # Visible until it is nearly edge-on; the clip keeps it inside the round outline.
         if ($facing -gt 0.08) {
-            $cx = $script:r + $script:r * [Math]::Sin($phi)
-            $w = [Math]::Max(2, [int][Math]::Round($script:pw * $facing))
-            $dx = $x0 + [int][Math]::Round($cx - $w / 2)
+            # Centre on the band: 4.5 px either side of the middle, row 8 at the front, row 7 at the sides.
+            $cx = $script:r + 4.5 * [Math]::Sin($phi); $cy = 7 + $facing
+            # Full width until well round: at 3 px the scaled button loses half its white centre.
+            $w = if ($facing -gt 0.55) { $script:pw } else { [Math]::Max(2, [int][Math]::Round($script:pw * $facing)) }
+            $dx = $x0 + [int][Math]::Round($cx - $w / 2); $dy = $top + [int][Math]::Round($cy - $script:ph / 2)
             $rim = New-Object System.Drawing.Drawing2D.GraphicsPath
             $rim.AddEllipse($x0 + 1, $top + 1, $bw - 2, $bh - 2)
             $g.SetClip($rim)
-            $g.DrawImage($script:patch, (New-Object System.Drawing.Rectangle $dx, ($top + $script:py0), $w, $script:ph),
+            $g.DrawImage($script:patch, (New-Object System.Drawing.Rectangle $dx, $dy, $w, $script:ph),
                 (New-Object System.Drawing.Rectangle 0, 0, $script:pw, $script:ph), [System.Drawing.GraphicsUnit]::Pixel)
             $g.ResetClip(); $rim.Dispose()
         }
