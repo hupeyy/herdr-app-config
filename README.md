@@ -91,5 +91,5 @@ from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademark
 Creatures and GAME FREAK. This is an unofficial fan mod.
 
 The Poké Ball is PokeAPI's poke-ball item sprite (a three-quarter view), animated by
-`mods/space-panel/pokeball-anim.ps1`: still when idle; while a dev workspace works it rocks one way, rocks the other way, then bounces once
+`mods/space-panel/pokeball-anim.ps1`: still when idle, open when an agent needs input; while a dev workspace works it rocks one way, rocks the other way, then bounces once
 (squash, stretch and a shadow), and repeats.

@@ -99,12 +99,47 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
     $out.Dispose()
 }
 
+# An opened ball (pokeball-v<V>-open.png), for an agent that finished: the bottom half stays on
+# the ground and the top half swings up and back on its rear hinge, with light inside.
+function Save-Open($path) {
+    # Cut at the band: the darkest row in the middle of the ball.
+    $split = [int]($bh / 2); $best = -1
+    for ($y = [int]($bh * 0.35); $y -le [int]($bh * 0.75); $y++) {
+        $dark = 0
+        for ($x = 0; $x -lt $bw; $x++) { $c = $script:ball.GetPixel($x, $y); if ($c.A -gt 0 -and ($c.R + $c.G + $c.B) -lt 300) { $dark++ } }
+        if ($dark -gt $best) { $best = $dark; $split = $y }
+    }
+    $out = New-Object System.Drawing.Bitmap $W, $H
+    $g = [System.Drawing.Graphics]::FromImage($out)
+    try {
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        $x0 = [int](($W - $bw) / 2); $top = $ground - $bh
+        $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
+        $g.FillEllipse($shadow, $x0 + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
+        # Bottom half, where it always is.
+        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle $x0, ($top + $split), $bw, ($bh - $split)),
+            (New-Object System.Drawing.Rectangle 0, $split, $bw, ($bh - $split)), [System.Drawing.GraphicsUnit]::Pixel)
+        # Light from inside the open ball.
+        $glow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(230, 255, 248, 200))
+        $g.FillEllipse($glow, $x0 + 2, $top + $split - 2, $bw - 4, 4); $glow.Dispose()
+        # Top half, swung up and back about its rear (left) end of the cut.
+        $g.TranslateTransform([single]($x0 + 1), [single]($top + $split))
+        $g.RotateTransform([single]-38)
+        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle -1, (-$split - 1), $bw, $split),
+            (New-Object System.Drawing.Rectangle 0, 0, $bw, $split), [System.Drawing.GraphicsUnit]::Pixel)
+    } finally { $g.Dispose() }
+    $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $out.Dispose()
+}
+
 $i = 0
 foreach ($f in $frames) {
     Save-Frame $f[0] $f[1] $f[2] $f[3] (Join-Path $Dir "pokeball-v$Version-c$i.png")
     $i++
 }
 Save-Frame 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-still.png")
+Save-Open (Join-Path $Dir "pokeball-v$Version-open.png")
 # space-panel draws the frames again when this marker is missing.
 Set-Content -Path (Join-Path $Dir "pokeball-v$Version-ready") -Value $i
 $ball.Dispose()

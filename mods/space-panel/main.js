@@ -54,18 +54,19 @@ async function ensurePokemonIcons() {
 }
 
 // The card's Poké Ball: PokeAPI's poke-ball item sprite (a three-quarter view), downloaded on
-// first use. Still when idle; while a dev workspace works it rocks one way on its base, rocks the
-// other way, then bounces once (squash, stretch, a shadow), and repeats. herdr can only spin an
-// svg, so pokeball-anim.ps1 draws the 24x32 frames once and the card swaps them on a timer (see
-// init). Without the sprite, the script draws a flat pixel ball instead.
+// first use. Still when idle; open when an agent needs input; while a dev workspace works it rocks
+// one way on its base, rocks the other way, then bounces once (squash, stretch, a shadow), and
+// repeats. herdr can only spin an svg, so pokeball-anim.ps1 draws the 24x32 frames once and the
+// card swaps them on a timer (see init). Without the sprite, the script draws a flat pixel ball.
 const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
 const BALL_SPRITE = `${POKEMON_DIR}/pokeball.png`;
 const BALL_SPRITE_URL = `${SPRITES}/items/poke-ball.png`;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "4";
+const BALL_VERSION = "5"; // 5 added the open ball
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
+const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
 
 async function makeBallFrames(dir) {
@@ -481,12 +482,13 @@ export default class DevWorkspaces extends View {
     const folder = mine.find((p) => p.cwd)?.cwd ?? space.folder;
     const fill = fillOf(t, (shared("space.colors") ?? {})[space.id] ?? "ansi6");
     const icon = (shared("space.icons") ?? {})[space.id];
-    // The space's own mark, like Orca's dot: red when an agent needs you; while one works, the
-    // Poké Ball hopping and rocking (a spinner until the art is ready); else the ball standing
-    // still (the color tile until then). Frames are 24x32: the ball, room above it, a shadow.
+    // The space's own mark, like Orca's dot: the Poké Ball open when an agent needs input (a red
+    // dot until the art is ready); rocking and hopping while one works (a spinner until then);
+    // else standing still (the color tile until then). Frames are 24x32: ball, room, a shadow.
     const ball = (img) => div().w(16).h(21).flex_none().flex().items_end().justify_center().child(img);
     const working = space.status === "working" && this.pokemonReady;
-    const mark = space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
+    const mark = space.status === "blocked" && this.pokemonReady ? ball(image(BALL_OPEN).w(16).h(21))
+      : space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
       : working ? ball(image(ballFrame(this.ballTick)).w(16).h(21))
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
