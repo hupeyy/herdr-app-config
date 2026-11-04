@@ -1,7 +1,11 @@
-// Lists the Jira tickets and GitHub PRs each Claude session works on, from its transcript.
-//   node scan-work.mjs <sessionId>...   ->   { "<sessionId>": { tickets: [key], prs: [{ url, repo, number }] } }
+// Lists the Jira tickets, GitHub PRs and git worktrees each Claude session works on, from its
+// transcript.
+//   node scan-work.mjs <sessionId>...
+//   -> { "<sessionId>": { tickets: [key], prs: [{ url, repo, number }], worktrees: [path] } }
 // Tickets: keys a jira_create made ("created KEY  ->"), keys in the person's own prompts, the
 // key a jira_* command acts on. PRs: Claude Code's own pr-link records (created, viewed or reviewed).
+// Worktrees: <dev>\worktrees\<repo>\<name> folders its tool calls name at least 3 times (a passing
+// mention, such as a memory note, names one once or twice); the Resource Manager sizes them.
 // Transcripts grow to MBs, so each file is read from where the last run stopped (cache below).
 
 import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync, mkdirSync, existsSync } from "node:fs";
@@ -13,6 +17,10 @@ const CACHE_DIR = join(homedir(), ".cache", "herdr-app");
 const CACHE = join(CACHE_DIR, "space-work.json");
 const KEY = /(?<![A-Za-z0-9])([A-Z][A-Z0-9]+-\d+)(?![A-Za-z0-9])/g;
 const PROJECT_KEYS = new Set(["RIPPLE"]); // filters look-alikes such as UTF-8 or SHA-256
+const WORKTREES = join(homedir(), "Desktop", "dev", "worktrees");
+const WORKTREE = /dev[\\/]+worktrees[\\/]+([A-Za-z0-9_.-]+)[\\/]+([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)/g;
+const WORKTREE_MIN = 3;
+const CACHE_VERSION = 2; // 2 added worktrees: older entries are read again from the start
 
 let cache = {};
 try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
@@ -61,6 +69,10 @@ function scanLines(lines, found) {
         if (typeof cmd === "string") for (const m of cmd.matchAll(/\bjira_\w+\s+["']?([A-Z][A-Z0-9]+-\d+)/g)) {
           if (keysIn(m[1]).length) add(found.tickets, m[1]);
         }
+        if (c.type === "tool_use") for (const m of JSON.stringify(c.input ?? {}).matchAll(WORKTREE)) {
+          const path = join(WORKTREES, m[1], m[2]);
+          found.wt[path] = (found.wt[path] ?? 0) + 1;
+        }
       }
     }
   }
@@ -69,10 +81,10 @@ function scanLines(lines, found) {
 const out = {};
 for (const id of process.argv.slice(2)) {
   const path = findTranscript(id);
-  if (!path) { out[id] = { tickets: [], prs: [] }; continue; }
+  if (!path) { out[id] = { tickets: [], prs: [], worktrees: [] }; continue; }
   const size = statSync(path).size;
   let c = cache[path];
-  if (!c || c.offset > size) c = { offset: 0, tickets: [], prs: [] };
+  if (!c || c.offset > size || c.v !== CACHE_VERSION) c = { v: CACHE_VERSION, offset: 0, tickets: [], prs: [], wt: {} };
   if (size > c.offset) {
     const buffer = Buffer.alloc(size - c.offset);
     const fd = openSync(path, "r");
@@ -85,7 +97,8 @@ for (const id of process.argv.slice(2)) {
     }
   }
   cache[path] = c;
-  out[id] = { tickets: c.tickets, prs: c.prs };
+  const worktrees = Object.entries(c.wt).filter(([p, n]) => n >= WORKTREE_MIN && existsSync(p)).map(([p]) => p);
+  out[id] = { tickets: c.tickets, prs: c.prs, worktrees };
 }
 
 try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(CACHE, JSON.stringify(cache)); } catch {}

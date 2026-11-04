@@ -265,7 +265,9 @@ export default class DevWorkspaces extends View {
         const found = JSON.parse(res.stdout || "{}");
         const known = new Set(spaces().map((s) => s.id));
         const sessions = Object.fromEntries(Object.entries(shared(WORK)?.sessions ?? {}).filter(([, w]) => known.has(w.space)));
-        for (const [sid, space] of live) sessions[sid] = { space, tickets: found[sid]?.tickets ?? [], prs: found[sid]?.prs ?? [] };
+        for (const [sid, space] of live) {
+          sessions[sid] = { space, tickets: found[sid]?.tickets ?? [], prs: found[sid]?.prs ?? [], worktrees: found[sid]?.worktrees ?? [] };
+        }
         const next = { sessions };
         if (JSON.stringify(next) !== JSON.stringify(shared(WORK) ?? {})) { setShared(WORK, next); cx.notify(); }
       } catch {} finally { this.scanning = false; }

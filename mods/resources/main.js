@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, terminals, exec, home, theme, closeOverlay, props, shared, setShared, run } from "herdr";
+import { spaces, panes, terminals, exec, home, theme, closeOverlay, props, shared, setShared, run, readTextFile } from "herdr";
 
 const EVERY_MS = 3000; // while the panel is open
 const CACHE = "resources.snapshot"; // { snap, prev }, shared with the status bar chip
@@ -48,6 +48,11 @@ export default class Resources extends View {
     if (cached?.snap) { this.snap = cached.snap; this.prev = cached.prev; }
     if (!cached?.snap || Date.now() - cached.snap.at > STALE_MS) this.refresh(cx);
     cx.timer.every(EVERY_MS, (cx) => this.refresh(cx));
+    this.disk = null; // disk.mjs results (~/.cache/herdr-app/disk.json)
+    this.diskOpen = new Set(); // worktrees expanded in Review
+    this.loadDisk(cx);
+    // A scan writes its progress as it goes: follow it while one runs.
+    cx.timer.every(1500, (cx) => { if (this.disk?.running || this.diskStarting) this.loadDisk(cx); });
   }
 
   refresh(cx) {
@@ -244,6 +249,101 @@ export default class Resources extends View {
             : `Close ${picked.length} dev workspace${picked.length === 1 ? "" : "s"}`)));
   }
 
+  // ---- Space: disk use of the worktrees the dev workspaces work in ----
+  // A dev workspace's worktrees come from its Claude sessions' transcripts (space-panel's
+  // scan-work.mjs, shared "space.work"): every session runs in the shared dev folder, so the
+  // worktrees it works in are what belongs to it. disk.mjs sizes them in the background.
+
+  worktreesBySpace() {
+    const names = new Map(spaces().map((sp) => [sp.id, sp.name]));
+    const by = new Map();
+    for (const w of Object.values(shared("space.work")?.sessions ?? {})) {
+      if (!names.has(w.space)) continue;
+      const set = by.get(w.space) ?? new Set();
+      for (const p of w.worktrees ?? []) set.add(p);
+      by.set(w.space, set);
+    }
+    return [...by].filter(([, set]) => set.size).map(([id, set]) => ({ id, name: names.get(id), paths: [...set] }));
+  }
+
+  loadDisk(cx) {
+    cx.spawn(async (cx) => {
+      const text = await readTextFile(`${home()}/.cache/herdr-app/disk.json`).catch(() => null);
+      try { this.disk = text ? JSON.parse(text) : null; } catch {}
+      if (this.disk?.running) this.diskStarting = false;
+      cx.notify();
+    });
+  }
+
+  scanDisk(cx) {
+    const paths = [...new Set(this.worktreesBySpace().flatMap((g) => g.paths))];
+    if (!paths.length || this.disk?.running) return;
+    this.diskStarting = true;
+    cx.notify();
+    exec("node", [`${home()}/.config/herdr-app/mods/resources/disk.mjs`, "start", JSON.stringify(paths)])
+      .then(() => this.loadDisk(cx), () => { this.diskStarting = false; cx.notify(); });
+  }
+
+  spaceCard(t) {
+    const d = this.disk;
+    const paths = [...new Set(this.worktreesBySpace().flatMap((g) => g.paths))];
+    const sized = paths.map((p) => d?.folders?.[p]).filter(Boolean);
+    const running = d?.running || this.diskStarting;
+    const status = running ? `Scanning ${d?.done ?? 0} of ${d?.total ?? paths.length} worktrees…`
+      : !paths.length ? "No worktrees found in the dev workspaces yet"
+      : !sized.length ? "Worktree disk usage is not scanned"
+      : `${gb(sized.reduce((a, f) => a + f.bytes, 0))} in ${sized.length} worktree${sized.length === 1 ? "" : "s"} · scanned ${age(Date.now() - d.at)} ago`;
+    const button = (id, label, enabled, onClick, icon) => h_flex().id(id).h(30).px(10).gap(6).items_center().rounded(7).flex_none()
+      .border_1().border_color(t.input).text_color(enabled ? t.foreground : t.dim)
+      .when(enabled, (el) => el.cursor_pointer().hover((st) => st.bg(t.hover)).on_click(onClick))
+      .when(Boolean(icon), (el) => el.child(running && icon === "spinner" ? svg(ICON("spinner")).size(12).spin(900) : svg(ICON(icon)).size(12)))
+      .child(label);
+    return h_flex().gap(10).items_center()
+      .child(svg(ICON("archive")).size(16).flex_none().text_color(t.muted))
+      .child(v_flex().flex_1().min_w(0)
+        .child(h_flex().gap(6).items_center()
+          .child(div().font_semibold().text_color(t.foreground).child("Space"))
+          .child(div().px(5).rounded(4).bg(t.raised).text_size(10.5).text_color(t.muted).child("Beta")))
+        .child(div().truncate().text_size(11.5).text_color(t.muted).child(status)))
+      .child(button("disk-scan", "Scan", paths.length > 0 && !running, (_e, cx) => this.scanDisk(cx), running ? "spinner" : "search"))
+      .child(button("disk-review", "Review", sized.length > 0, (_e, cx) => { this.view = "disk"; cx.notify(); }));
+  }
+
+  diskReview(t) {
+    const d = this.disk ?? { folders: {} };
+    const groups = this.worktreesBySpace().map((g) => {
+      const items = g.paths.map((p) => ({ path: p, ...(d.folders[p] ?? { bytes: 0, files: 0, top: [] }) })).sort((a, b) => b.bytes - a.bytes);
+      return { ...g, items, bytes: items.reduce((a, i) => a + i.bytes, 0) };
+    }).sort((a, b) => b.bytes - a.bytes);
+    const short = (p) => p.split(/[\\/]/).slice(-2).join("/");
+    return v_flex().id("disk-rows").flex_1().min_h(140).overflow_y_scrollbar()
+      .child(div().px(12).py(8).text_size(12).text_color(t.muted)
+        .child("The git worktrees each dev workspace's sessions work in. Linked folders (a borrowed node_modules) are not counted."))
+      .children(groups.flatMap((g) => [
+        h_flex().h(32).px(12).gap(8).items_center().border_t(1).border_color(t.border)
+          .child(div().flex_1().min_w(0).truncate().font_semibold().text_color(t.foreground).child(g.name))
+          .child(div().flex_none().font_semibold().text_color(t.foreground).child(gb(g.bytes))),
+        ...g.items.flatMap((i) => {
+          const open = this.diskOpen.has(i.path);
+          const row = h_flex().id(`wt-${g.id}-${i.path}`).h(30).pl(20).pr(12).gap(8).items_center().cursor_pointer().hover((st) => st.bg(t.hover))
+            .on_click((_e, cx) => { if (open) this.diskOpen.delete(i.path); else this.diskOpen.add(i.path); cx.notify(); })
+            .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(10).flex_none().text_color(t.dim))
+            .child(svg(ICON("git-branch")).size(12).flex_none().text_color(t.muted))
+            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).tooltip(i.path).child(short(i.path)))
+            .child(div().flex_none().text_size(11).text_color(t.dim).child(i.at ? `${i.files.toLocaleString()} files` : "not scanned"))
+            .child(div().w(70).flex_none().text_right().text_color(t.muted).child(i.at ? gb(i.bytes) : "—"))
+            .child(div().id(`wt-open-${i.path}`).px(6).flex_none().rounded(5).text_size(11.5).text_color(t.dim).cursor_pointer()
+              .hover((st) => st.bg(t.raised).text_color(t.foreground)).tooltip("Open in Explorer")
+              .on_click((_e, cx) => { cx.stop_propagation(); exec("explorer", [i.path]); })
+              .child("Open"));
+          if (!open) return [row];
+          return [row, ...(i.top ?? []).map((x) => h_flex().h(24).pl(58).pr(12).gap(8).items_center().text_size(11.5)
+            .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(x.name))
+            .child(div().w(70).flex_none().text_right().text_color(t.dim).child(gb(x.bytes))))];
+        }),
+      ]));
+  }
+
   ptys(t, cx) {
     const s = this.snap;
     const allPanes = panes();
@@ -295,13 +395,14 @@ export default class Resources extends View {
           .hover((st) => st.bg(t.hover)).on_click((_e, cx) => this.refresh(cx))
           .child("Refresh")
           .child(this.busy ? svg(ICON("spinner")).size(12).text_color(t.muted).spin(900) : div().size(12))))
-      .when(this.view === "cleanup", (el) => el
-        .child(h_flex().id("cleanup-back").h(34).px(12).gap(6).flex_none().items_center().border_b(1).border_color(t.border)
+      .when(this.view !== "main", (el) => el
+        .child(h_flex().id("view-back").h(34).px(12).gap(6).flex_none().items_center().border_b(1).border_color(t.border)
           .cursor_pointer().text_color(t.foreground).hover((st) => st.bg(t.hover))
           .on_click((_e, cx) => { this.view = "main"; this.closeArmed = false; cx.notify(); })
-          .child(svg(ICON("chevron-left")).size(12)).child(div().font_semibold().child("Clean up workspaces")))
-        .child(this.cleanup(t)))
-      .when(this.view !== "cleanup", (el) => el
+          .child(svg(ICON("chevron-left")).size(12))
+          .child(div().font_semibold().child(this.view === "disk" ? "Space: worktree disk use" : "Clean up workspaces")))
+        .child(this.view === "disk" ? this.diskReview(t) : this.cleanup(t)))
+      .when(this.view === "main", (el) => el
       .child(h_flex().px(12).pt(6).gap(14).flex_none().border_b(1).border_color(t.border)
         .child(tabButton("resources", "Resources", "layers"))
         .child(tabButton("ptys", "PTYs", "terminal")))
@@ -317,7 +418,8 @@ export default class Resources extends View {
           .when(this.tab === "resources", (el) => el.child(this.header(t, "cpu", "CPU", 46, "right")).child(this.header(t, "ws", "WS", 70, "right")))
           .when(this.tab === "ptys", (el) => el.child(this.header(t, "ws", "WS", 66, "right")).child(div().w(36))))
         .child(this.tab === "ptys" ? this.ptys(t, cx) : this.resources(t)))
-      .child(div().p(12).flex_none().border_t(1).border_color(t.border)
+      .child(v_flex().p(12).gap(10).flex_none().border_t(1).border_color(t.border)
+        .child(this.spaceCard(t))
         .child(h_flex().id("open-cleanup").h(36).px(12).items_center().rounded(8).border_1().border_color(t.border)
           .cursor_pointer().hover((st) => st.bg(t.hover)).text_color(t.foreground)
           .on_click((_e, cx) => { this.view = "cleanup"; this.picked.clear(); this.closeArmed = false; cx.notify(); })
