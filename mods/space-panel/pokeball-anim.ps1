@@ -100,14 +100,39 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
 }
 
 # The shell spin (pokeball-v<V>-s<n>.png), for an agent with a shell still running: one full turn
-# about the ball's vertical axis through its centre, like a coin spun on a table, in 30-degree
-# steps, then a short pause, and again. A flat sprite cannot turn in 3D, so its width follows
-# cos(angle), down to a sliver edge-on, and it is mirrored while its back faces the viewer.
+# about the ball's vertical axis through its centre, in 30-degree steps, then a short pause, and
+# again. A sphere keeps its round outline as it turns, and a Poke Ball looks the same all round
+# except for its button, so only the button moves: along the band, narrowing toward the edge,
+# hidden while it is round the back. The outline, shading and highlight stay where they are.
 $spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
+
+# The PokeAPI sprite's button, in the cropped ball's pixels (the sprite is a fixed file): a white
+# cross in a grey ring on the band, left of centre (sprite rows 16-20, columns 10-14).
+$haveButton = $Sprite -and (Test-Path $Sprite) -and $bw -eq 18 -and $bh -eq 18
+if ($haveButton) {
+    $px0 = 4; $py0 = 10; $pw = 5; $ph = 5
+    # Only the ring and cross move: the cut's red corners and white-half pixels stay transparent.
+    $patch = New-Object System.Drawing.Bitmap $pw, $ph
+    for ($x = 0; $x -lt $pw; $x++) { for ($y = 0; $y -lt $ph; $y++) {
+        $corner = ($y -eq 0 -and ($x -eq 0 -or $x -eq 4)) -or ($y -eq 4 -and ($x -eq 0 -or $x -eq 4))
+        if (-not $corner) { $patch.SetPixel($x, $y, $ball.GetPixel($px0 + $x, $py0 + $y)) }
+    } }
+    # The ball without its button: red cap above the band where the ring's top was, band where
+    # the cross was, then the white half below it (keeping that half's own highlight at the left).
+    $plain = $ball.Clone()
+    $red = $ball.GetPixel(4, 10); $band = $ball.GetPixel(15, 11); $white = $ball.GetPixel(9, 14)
+    for ($x = 5; $x -le 7; $x++) { $plain.SetPixel($x, 10, $red) }
+    for ($x = 4; $x -le 8; $x++) {
+        $plain.SetPixel($x, 11, $band); $plain.SetPixel($x, 12, $band)
+        if ($x -lt 8) { $plain.SetPixel($x, 13, $white) }
+        if ($x -gt 4) { $plain.SetPixel($x, 14, $white) }
+    }
+    # Where the button sits on the turning sphere: its angle from the facing direction.
+    $r = $bw / 2
+    $phi0 = [Math]::Asin((($px0 + $pw / 2) - $r) / $r)
+}
+
 function Save-Spin($angle, $path) {
-    $cos = [Math]::Cos($angle * [Math]::PI / 180)
-    # GDI+ rejects a zero scale: edge-on stays a sliver one or two pixels wide.
-    $sx = if ([Math]::Abs($cos) -lt 0.12) { 0.12 * [Math]::Sign($cos + 1e-9) } else { $cos }
     $out = New-Object System.Drawing.Bitmap $W, $H
     $g = [System.Drawing.Graphics]::FromImage($out)
     try {
@@ -115,10 +140,30 @@ function Save-Spin($angle, $path) {
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
         $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
         $g.FillEllipse($shadow, [int](($W - $bw) / 2) + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
-        # Narrowed (and mirrored past 90 degrees) about the vertical line through the ball's centre.
-        $g.TranslateTransform([single]($W / 2), [single]($ground - $bh / 2))
-        $g.ScaleTransform([single]$sx, [single]1)
-        $g.DrawImage($script:ball, [single](-$bw / 2), [single](-$bh / 2), [single]$bw, [single]$bh)
+        $x0 = [int](($W - $bw) / 2); $top = $ground - $bh
+        if (-not $script:haveButton) {
+            # The flat fallback ball: no button to move, so it simply stands there, round.
+            $g.DrawImage($script:ball, $x0, $top, $bw, $bh)
+        } else {
+            $g.DrawImage($script:plain, $x0, $top, $bw, $bh)
+            $phi = $script:phi0 + $angle * [Math]::PI / 180
+            $facing = [Math]::Cos($phi)
+            # Visible until it is nearly edge-on; the clip below keeps it inside the outline.
+            if ($facing -gt 0.08) {
+                $cx = $script:r + $script:r * [Math]::Sin($phi)
+                $w = [Math]::Max(2, [int][Math]::Round($script:pw * $facing))
+                # The band runs about a pixel lower on the right than on the left.
+                $dy = $top + $script:py0 + [int][Math]::Round(($cx - $script:r) / $script:r * 0.8 + 0.3)
+                $dx = $x0 + [int][Math]::Round($cx - $w / 2)
+                # Near the rim the button must not poke outside the ball's round outline.
+                $rim = New-Object System.Drawing.Drawing2D.GraphicsPath
+                $rim.AddEllipse($x0 + 1, $top + 1, $bw - 2, $bh - 2)
+                $g.SetClip($rim)
+                $g.DrawImage($script:patch, (New-Object System.Drawing.Rectangle $dx, $dy, $w, $script:ph),
+                    (New-Object System.Drawing.Rectangle 0, 0, $script:pw, $script:ph), [System.Drawing.GraphicsUnit]::Pixel)
+                $g.ResetClip(); $rim.Dispose()
+            }
+        }
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
