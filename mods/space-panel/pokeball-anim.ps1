@@ -6,9 +6,9 @@
 # Frames are 24x32 with the ground near the bottom; nearest-neighbour keeps the pixels.
 # Files are named pokeball-v<Version>-...: herdr caches images by path, so a new look needs new
 # names to show (space-panel's BALL_VERSION passes the version).
-# -LidAngle, -LidShift and -LidScale set how far the open ball's lid is swung back (try others
-# with a throwaway -Version and -Dir to compare).
-param([Parameter(Mandatory)][string]$Dir, [string]$Version = '3', [string]$Sprite = '', [int]$LidAngle = 38, [int]$LidShift = 3, [int]$LidScale = 75)
+# -LidAngle sets how far the open ball's lid is tipped back (try others with a throwaway
+# -Version and -Dir to compare).
+param([Parameter(Mandatory)][string]$Dir, [string]$Version = '3', [string]$Sprite = '', [int]$LidAngle = 18)
 
 Add-Type -AssemblyName System.Drawing
 
@@ -203,12 +203,12 @@ function Save-Spin($angle, $turning, $path) {
     $out.Dispose()
 }
 
-# An opened ball (pokeball-v<V>-open.png), for an agent that needs input, after the classic
-# opening sprite, in the same three-quarter view as the closed ball: seen a little from above and
-# from the front left (the button is left of centre and the band slopes down to the right). The
-# opening follows the band's slope; the lid is hinged at the back right, opposite the button, and
-# leans up and back that way with its grey inside facing the viewer and the red shell along its
-# outer edge. Colours come from the sprite.
+# A half-opened ball (pokeball-v<V>-open.png), for an agent that needs input, after the middle
+# frame of the classic opening sprite, in the same three-quarter view as the closed ball (seen a
+# little from above and from the front left: the button is left of centre, the band slopes down
+# to the right). The lid is the closed ball's own top half, tipped back -LidAngle degrees on its
+# hinge at the back right, opposite the button, so its front lifts; under that edge the opening
+# shows a light rim and a dark hollow. Colours come from the sprite.
 function Save-Open($path) {
     $out = New-Object System.Drawing.Bitmap $W, $H
     $g = [System.Drawing.Graphics]::FromImage($out)
@@ -218,8 +218,7 @@ function Save-Open($path) {
         $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
         $x0 = [int](($W - $bw) / 2); $top = $ground - $bh
         $brush = { param($r, $gg, $b, $a = 255) New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb($a, $r, $gg, $b)) }
-        $outline = & $brush 49 49 49; $red = & $brush 255 148 58; $redDark = & $brush 222 90 58
-        $grey = & $brush 123 123 132; $greyLight = & $brush 165 165 197; $greyDark = & $brush 74 82 82
+        $outline = & $brush 49 49 49; $greyDark = & $brush 74 82 82; $grey = & $brush 123 123 132
         $rim = & $brush 222 206 247; $hollow = & $brush 24 24 30; $shadow = & $brush 0 0 0 100
         # An ellipse of size w x h centred at (cx, cy), turned by angle degrees (down to the right).
         $oval = {
@@ -229,35 +228,30 @@ function Save-Open($path) {
             $g.ResetTransform()
         }
         $g.FillEllipse($shadow, $x0 + 1, $ground - 1, $bw - 2, 3)
-        # Lid: hinged at the back right of the opening, leaning up and back to the right. Its
-        # inside faces front left, so the red shell shows as a rim along its upper right edge.
-        # Opened further, the lid is seen more edge-on, so it is drawn smaller ($k) and further
-        # up and back toward its hinge, leaving the opening clear.
-        $k = $script:LidScale / 100
-        # It stays low enough that its lower edge meets the back of the rim, where the hinge is.
-        $lx = $x0 + 11 + $script:LidShift; $ly = $top + 2 - [int]($script:LidShift / 2); $la = $script:LidAngle
-        & $oval $outline $lx $ly (18 * $k) (16 * $k) $la
-        & $oval $red $lx $ly (16 * $k) (14 * $k) $la
-        & $oval $redDark ($lx + 3 * $k) ($ly + 1 * $k) (9 * $k) (11 * $k) $la
-        & $oval $outline ($lx - 1 * $k) ($ly + 1 * $k) (15 * $k) (13 * $k) $la
-        & $oval $grey ($lx - 1 * $k) ($ly + 1 * $k) (13 * $k) (11 * $k) $la
-        & $oval $greyDark ($lx - 1 * $k) ($ly + 4 * $k) (10 * $k) (5 * $k) $la
-        & $oval $grey ($lx - 2 * $k) ($ly + 2 * $k) (10 * $k) (7 * $k) $la
-        & $oval $greyLight ($lx - 4 * $k) ($ly - 1 * $k) (5 * $k) (4 * $k) $la
-        # The hinge: a short dark block joining the lid to the back right of the rim.
-        $g.FillRectangle($outline, $x0 + 13, $top + 6, 3, 3)
-        $g.FillRectangle($greyDark, $x0 + 14, $top + 7, 1, 1)
-        # Bowl: the sprite's own lower half, from the band down.
-        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle $x0, ($top + 10), $bw, ($bh - 10)),
-            (New-Object System.Drawing.Rectangle 0, 10, $bw, ($bh - 10)), [System.Drawing.GraphicsUnit]::Pixel)
+        # Bottom half: the sprite's own, from the band down.
+        $cut = 10
+        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle $x0, ($top + $cut), $bw, ($bh - $cut)),
+            (New-Object System.Drawing.Rectangle 0, $cut, $bw, ($bh - $cut)), [System.Drawing.GraphicsUnit]::Pixel)
         # Its opening along the band, sloping down to the right like the band: outline, light rim,
-        # dark hollow, and the far inside wall a little lighter so the hollow reads as depth.
+        # dark hollow. The lid covers most of it; its front shows under the lifted edge.
         $ox = $x0 + 9; $oy = $top + 11; $oa = 7
         & $oval $outline $ox $oy 18 8 $oa
         & $oval $rim $ox $oy 17 7 $oa
         & $oval $hollow $ox ($oy + 0.5) 15 5 $oa
-        & $oval $greyDark $ox ($oy - 1) 11 2 $oa
-        foreach ($b in $outline, $red, $redDark, $grey, $greyLight, $greyDark, $rim, $hollow, $shadow) { $b.Dispose() }
+        # Lid: the top half, tipped back about its hinge at the back right of the cut, with a
+        # grey strip along its lower edge (the inside of its rim, seen under the lifted front).
+        $hx = $x0 + $bw - 2; $hy = $top + $cut + 1
+        $g.TranslateTransform([single]$hx, [single]$hy)
+        # Positive is clockwise on screen (y runs down), which lifts the front left about the
+        # hinge at the right.
+        $g.RotateTransform([single]$script:LidAngle)
+        $g.TranslateTransform([single](-$hx), [single](-$hy))
+        $g.FillRectangle($grey, $x0 + 2, $top + $cut, $bw - 4, 1)
+        $g.FillRectangle($outline, $x0 + 2, $top + $cut + 1, $bw - 4, 1)
+        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle $x0, $top, $bw, $cut),
+            (New-Object System.Drawing.Rectangle 0, 0, $bw, $cut), [System.Drawing.GraphicsUnit]::Pixel)
+        $g.ResetTransform()
+        foreach ($b in $outline, $greyDark, $grey, $rim, $hollow, $shadow) { $b.Dispose() }
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
