@@ -1,11 +1,12 @@
-# The Poke Ball on space-panel's cards: a red-and-white pixel ball drawn from the map below (no
-# downloaded art), standing still (pokeball-still.png) and, while a dev workspace works
-# (pokeball-c<n>.png): it rocks one way on its base, rocks the other way, then bounces once
-# (squash and stretch, a shadow that shrinks with height), and repeats. Frames are 20x30 with the
-# ground near the bottom; nearest-neighbour keeps the pixels.
-# Files are named pokeball-v<Version>-...: herdr caches images by path, so a new motion needs new
+# The Poke Ball on space-panel's cards, standing still (pokeball-v<V>-still.png) and, while a
+# dev workspace works (pokeball-v<V>-c<n>.png): it rocks one way on its base, rocks the other way,
+# then bounces once (squash and stretch, a shadow that shrinks with height), and repeats.
+# The ball is -Sprite (PokeAPI's poke-ball item, drawn at a three-quarter angle), cropped to its
+# own pixels; without one, the flat red-and-white pixel ball from the map below.
+# Frames are 24x32 with the ground near the bottom; nearest-neighbour keeps the pixels.
+# Files are named pokeball-v<Version>-...: herdr caches images by path, so a new look needs new
 # names to show (space-panel's BALL_VERSION passes the version).
-param([Parameter(Mandatory)][string]$Dir, [string]$Version = '3')
+param([Parameter(Mandatory)][string]$Dir, [string]$Version = '3', [string]$Sprite = '')
 
 Add-Type -AssemblyName System.Drawing
 
@@ -34,16 +35,34 @@ $colors = @{
     'W' = [System.Drawing.Color]::FromArgb(255, 244, 244, 244)
     'L' = [System.Drawing.Color]::FromArgb(255, 168, 168, 168)
 }
-$size = $map.Count
-$ball = New-Object System.Drawing.Bitmap $size, $size
-for ($y = 0; $y -lt $size; $y++) {
-    for ($x = 0; $x -lt $size; $x++) {
-        $c = $map[$y][$x]
-        if ($c -ne '.') { $ball.SetPixel($x, $y, $colors[[string]$c]) }
+if ($Sprite -and (Test-Path $Sprite)) {
+    # The sprite has a transparent margin: keep only the ball's own pixels.
+    $src = [System.Drawing.Bitmap]::FromFile($Sprite)
+    $minX = $src.Width; $minY = $src.Height; $maxX = -1; $maxY = -1
+    for ($y = 0; $y -lt $src.Height; $y++) {
+        for ($x = 0; $x -lt $src.Width; $x++) {
+            if ($src.GetPixel($x, $y).A -gt 0) {
+                if ($x -lt $minX) { $minX = $x }; if ($x -gt $maxX) { $maxX = $x }
+                if ($y -lt $minY) { $minY = $y }; if ($y -gt $maxY) { $maxY = $y }
+            }
+        }
+    }
+    $bw = $maxX - $minX + 1; $bh = $maxY - $minY + 1
+    $ball = $src.Clone((New-Object System.Drawing.Rectangle $minX, $minY, $bw, $bh), $src.PixelFormat)
+    $src.Dispose()
+} else {
+    $bw = $bh = $map.Count
+    $ball = New-Object System.Drawing.Bitmap $bw, $bh
+    for ($y = 0; $y -lt $bh; $y++) {
+        for ($x = 0; $x -lt $bw; $x++) {
+            $c = $map[$y][$x]
+            if ($c -ne '.') { $ball.SetPixel($x, $y, $colors[[string]$c]) }
+        }
     }
 }
 
-$W = 20; $H = 30; $ground = 28
+# Wide enough that a 20-degree rock of the sprite's ball stays inside the frame.
+$W = 24; $H = 32; $ground = 30
 
 # lift (px above ground), x scale, y scale, tilt (degrees, about the ball's base)
 $rock = { param($dir) @(
@@ -64,7 +83,7 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
         # Shadow: wide and dark on the ground, small and faint at the top of a hop.
         $k = 1 - ($lift / 16)
-        $sw = [int][Math]::Round($size * (0.55 + 0.45 * $k) * [Math]::Max(1, $sx))
+        $sw = [int][Math]::Round($bw * (0.55 + 0.45 * $k) * [Math]::Max(1, $sx))
         $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int](40 + 60 * $k), 0, 0, 0))
         $g.FillEllipse($brush, [int](($W - $sw) / 2), $ground - 1, $sw, 3)
         $brush.Dispose()
@@ -74,7 +93,7 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
         $g.TranslateTransform([single]($W / 2), [single]($ground - $lift))
         $g.RotateTransform([single]$angle)
         $g.ScaleTransform([single]$sx, [single]$sy)
-        $g.DrawImage($script:ball, [single](-$size / 2), [single](-$size), [single]$size, [single]$size)
+        $g.DrawImage($script:ball, [single](-$bw / 2), [single](-$bh), [single]$bw, [single]$bh)
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()

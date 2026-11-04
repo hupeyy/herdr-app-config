@@ -53,22 +53,29 @@ async function ensurePokemonIcons() {
   return makeBallFrames(dir);
 }
 
-// The card's Poké Ball, a red-and-white pixel ball drawn by pokeball-anim.ps1 (no downloaded
-// art): still when idle; while a dev workspace works it rocks one way on its base, rocks the other
-// way, then bounces once (squash, stretch, a shadow), and repeats. herdr can only spin an svg, so
-// the script draws the 20x30 frames once and the card swaps them on a timer (see init).
+// The card's Poké Ball: PokeAPI's poke-ball item sprite (a three-quarter view), downloaded on
+// first use. Still when idle; while a dev workspace works it rocks one way on its base, rocks the
+// other way, then bounces once (squash, stretch, a shadow), and repeats. herdr can only spin an
+// svg, so pokeball-anim.ps1 draws the 24x32 frames once and the card swaps them on a timer (see
+// init). Without the sprite, the script draws a flat pixel ball instead.
 const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
+const BALL_SPRITE = `${POKEMON_DIR}/pokeball.png`;
+const BALL_SPRITE_URL = `${SPRITES}/items/poke-ball.png`;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
-// motion changes, or the cards keep showing the old frames.
-const BALL_VERSION = "3";
+// motion or the ball changes, or the cards keep showing the old frames.
+const BALL_VERSION = "4";
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
 
 async function makeBallFrames(dir) {
   if (await readTextFile(`${dir}/pokeball-v${BALL_VERSION}-ready`).catch(() => null)) return true;
+  const sprite = `${appHome()}/${BALL_SPRITE}`;
+  if (!(await readTextFile(sprite).catch(() => null))) {
+    await exec("curl", ["-sfL", "--retry", "2", "--create-dirs", "-o", sprite, BALL_SPRITE_URL]).catch(() => null);
+  }
   await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir, "-Version", BALL_VERSION]).catch(() => null);
+    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir, "-Version", BALL_VERSION, "-Sprite", sprite]).catch(() => null);
   return true;
 }
 
@@ -476,14 +483,14 @@ export default class DevWorkspaces extends View {
     const icon = (shared("space.icons") ?? {})[space.id];
     // The space's own mark, like Orca's dot: red when an agent needs you; while one works, the
     // Poké Ball hopping and rocking (a spinner until the art is ready); else the ball standing
-    // still (the color tile until then). Frames are 20x30: the ball, room above it, a shadow.
-    const ball = (img) => div().w(14).h(21).flex_none().flex().items_end().justify_center().child(img);
+    // still (the color tile until then). Frames are 24x32: the ball, room above it, a shadow.
+    const ball = (img) => div().w(16).h(21).flex_none().flex().items_end().justify_center().child(img);
     const working = space.status === "working" && this.pokemonReady;
     const mark = space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
-      : working ? ball(image(ballFrame(this.ballTick)).w(14).h(21))
+      : working ? ball(image(ballFrame(this.ballTick)).w(16).h(21))
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
-      : this.pokemonReady ? ball(image(BALL_STILL).w(14).h(21))
+      : this.pokemonReady ? ball(image(BALL_STILL).w(16).h(21))
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
         .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color("#ffffff")));
     const latest = rows.filter((r) => r.status).sort((a, b) => (b.at ?? 0) - (a.at ?? 0))[0];
