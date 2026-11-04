@@ -86,6 +86,9 @@ Each dev workspace card shows a Poké Ball and its own Pokémon, after
 [mathieucroset/herdr-pokemon-agents](https://github.com/mathieucroset/herdr-pokemon-agents) (MIT).
 A new dev workspace gets a random one; the Edit dialog picks another (all 1,025, searchable).
 The art is downloaded on first use into `data/pokemon-icons/` and is not in this repo:
-menu icons and item sprites from [PokeAPI/sprites](https://github.com/PokeAPI/sprites), names
+menu icons from [PokeAPI/sprites](https://github.com/PokeAPI/sprites), names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
 Creatures and GAME FREAK. This is an unofficial fan mod.
+
+The Poké Ball is drawn by `mods/space-panel/pokeball-anim.ps1` from a pixel map: still when
+idle, and while a dev workspace works it hops and rocks with squash, stretch and a shadow.
