@@ -43,7 +43,7 @@ function pokemonFor(ids) {
 
 async function ensurePokemonIcons() {
   const dir = `${appHome()}/${POKEMON_DIR}`;
-  if (await readTextFile(`${dir}/${POKEMON_READY}`).catch(() => null)) return true;
+  if (await readTextFile(`${dir}/${POKEMON_READY}`).catch(() => null)) return makeWobbleFrames(dir);
   const files = [[`${appHome()}/${POKEBALL}`, POKEBALL_URL]];
   for (let id = 1; id <= POKEMON_COUNT; id++) files.push([`${dir}/${id}.png`, iconUrl(id)]);
   for (let i = 0; i < files.length; i += POKEMON_BATCH) {
@@ -53,6 +53,23 @@ async function ensurePokemonIcons() {
     if (r?.code !== 0) return false;
   }
   await writeTextFile(`${dir}/${POKEMON_READY}`, String(Date.now()), null).catch(() => null);
+  return makeWobbleFrames(dir);
+}
+
+// The capture wobble while a dev workspace works: the Poké Ball tilts left and right on its
+// base, then rests, like the game. herdr can only spin an svg, so pokeball-frames.ps1 draws the
+// tilted copies once and the card swaps them on a timer (see init).
+const WOBBLE = [0, -12, -24, -12, 0, 12, 24, 12, 0, 0, 0, 0, 0, 0];
+const WOBBLE_MS = 120;
+const wobbleFrame = (step) => {
+  const angle = WOBBLE[step % WOBBLE.length];
+  return angle ? `${POKEMON_DIR}/pokeball-r${angle}.png` : POKEBALL;
+};
+
+async function makeWobbleFrames(dir) {
+  if (await readTextFile(`${dir}/pokeball-r24.png`).catch(() => null)) return true;
+  await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+    `${appHome()}/mods/space-panel/pokeball-frames.ps1`, "-Dir", dir]).catch(() => null);
   return true;
 }
 
@@ -231,6 +248,14 @@ export default class DevWorkspaces extends View {
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
     this.pokemonReady = false;
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
+    // Steps the Poké Ball wobble; redraws only while some dev workspace is working.
+    this.wobbleStep = 0;
+    this.anyWorking = false;
+    cx.timer.every(WOBBLE_MS, (cx) => {
+      if (!this.anyWorking || !this.pokemonReady) return;
+      this.wobbleStep = (this.wobbleStep + 1) % WOBBLE.length;
+      cx.notify();
+    });
     cx.timer.every(WORK_POLL_MS, (cx) => this.pollWork(cx));
     this.pollWork(cx);
     this.subagents = new Map(); // claude session id -> its subagents (scan-agents.mjs)
@@ -450,9 +475,11 @@ export default class DevWorkspaces extends View {
     const folder = mine.find((p) => p.cwd)?.cwd ?? space.folder;
     const fill = fillOf(t, (shared("space.colors") ?? {})[space.id] ?? "ansi6");
     const icon = (shared("space.icons") ?? {})[space.id];
-    // The space's own mark, like Orca's dot: red when an agent needs you, spinning while one works,
-    // else a Poké Ball (the color tile while the Pokémon art is still downloading).
+    // The space's own mark, like Orca's dot: red when an agent needs you; while one works, a Poké
+    // Ball rocking like a capture (a spinner until the art is downloaded); else a still Poké Ball
+    // (the color tile while the art is downloading).
     const mark = space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
+      : space.status === "working" && this.pokemonReady ? image(wobbleFrame(this.wobbleStep)).w(16).h(16).flex_none()
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
       : this.pokemonReady ? image(POKEBALL).w(16).h(16).flex_none()
@@ -698,6 +725,7 @@ export default class DevWorkspaces extends View {
     if (props()?.rowMenu) return this.rowMenu(t);
     if (props()?.moveConfirm) return this.moveConfirm(t);
     this.pokemon = pokemonFor(spaces().map((s) => s.id));
+    this.anyWorking = spaces().some((s) => s.status === "working");
 
     const request = shared(MOVE_REQUEST);
     if (request && Number(request.at) > this.lastMove) {
