@@ -201,35 +201,43 @@ function Save-Spin($angle, $turning, $path) {
     $out.Dispose()
 }
 
-# An opened ball (pokeball-v<V>-open.png), for an agent that needs input: the bottom half stays on
-# the ground and the top half swings up and back on its rear hinge, with light inside.
+# An opened ball (pokeball-v<V>-open.png), for an agent that needs input, after the classic
+# opening sprite, kept in the three-quarter view: the lid stands up and back behind the ball,
+# its grey inside facing the viewer with the red shell as a rim along its top; the bottom half is
+# a bowl whose opening shows a light rim around a dark hollow. Colours come from the sprite.
 function Save-Open($path) {
-    # Cut at the band: the darkest row in the middle of the ball.
-    $split = [int]($bh / 2); $best = -1
-    for ($y = [int]($bh * 0.35); $y -le [int]($bh * 0.75); $y++) {
-        $dark = 0
-        for ($x = 0; $x -lt $bw; $x++) { $c = $script:ball.GetPixel($x, $y); if ($c.A -gt 0 -and ($c.R + $c.G + $c.B) -lt 300) { $dark++ } }
-        if ($dark -gt $best) { $best = $dark; $split = $y }
-    }
     $out = New-Object System.Drawing.Bitmap $W, $H
     $g = [System.Drawing.Graphics]::FromImage($out)
     try {
         $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
         $x0 = [int](($W - $bw) / 2); $top = $ground - $bh
-        $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
-        $g.FillEllipse($shadow, $x0 + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
-        # Bottom half, where it always is.
-        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle $x0, ($top + $split), $bw, ($bh - $split)),
-            (New-Object System.Drawing.Rectangle 0, $split, $bw, ($bh - $split)), [System.Drawing.GraphicsUnit]::Pixel)
-        # Light from inside the open ball.
-        $glow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(230, 255, 248, 200))
-        $g.FillEllipse($glow, $x0 + 2, $top + $split - 2, $bw - 4, 4); $glow.Dispose()
-        # Top half, swung up and back about its rear (left) end of the cut.
-        $g.TranslateTransform([single]($x0 + 1), [single]($top + $split))
-        $g.RotateTransform([single]-38)
-        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle -1, (-$split - 1), $bw, $split),
-            (New-Object System.Drawing.Rectangle 0, 0, $bw, $split), [System.Drawing.GraphicsUnit]::Pixel)
+        $brush = { param($r, $gg, $b, $a = 255) New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb($a, $r, $gg, $b)) }
+        $outline = & $brush 49 49 49; $red = & $brush 255 148 58; $redDark = & $brush 222 90 58
+        $grey = & $brush 123 123 132; $greyLight = & $brush 165 165 197; $greyDark = & $brush 74 82 82
+        $rim = & $brush 222 206 247; $hollow = & $brush 24 24 30; $shadow = & $brush 0 0 0 100
+        $g.FillEllipse($shadow, $x0 + 1, $ground - 1, $bw - 2, 3)
+        # Lid, standing up behind: outline, red shell, then its grey inside (the shell shows as a
+        # rim along the top), lit at the upper left and darker toward its hinge.
+        $g.FillEllipse($outline, $x0, $top - 8, $bw, 16)
+        $g.FillEllipse($red, $x0 + 1, $top - 7, $bw - 2, 14)
+        $g.FillEllipse($redDark, $x0 + 9, $top - 5, $bw - 11, 11)
+        $g.FillEllipse($outline, $x0 + 1, $top - 5, $bw - 2, 13)
+        $g.FillEllipse($grey, $x0 + 2, $top - 4, $bw - 4, 11)
+        $g.FillEllipse($greyDark, $x0 + 4, $top + 1, $bw - 8, 6)
+        $g.FillEllipse($grey, $x0 + 4, $top, $bw - 8, 5)
+        $g.FillEllipse($greyLight, $x0 + 4, $top - 3, 6, 4)
+        # Bowl: the sprite's own lower half, from the band down.
+        $g.DrawImage($script:ball, (New-Object System.Drawing.Rectangle $x0, ($top + 10), $bw, ($bh - 10)),
+            (New-Object System.Drawing.Rectangle 0, 10, $bw, ($bh - 10)), [System.Drawing.GraphicsUnit]::Pixel)
+        # Its opening, seen from above the front: outline, light rim, dark hollow, and the far
+        # inside wall a little lighter so the hollow reads as depth.
+        $g.FillEllipse($outline, $x0, $top + 7, $bw, 8)
+        $g.FillEllipse($rim, $x0 + 1, $top + 8, $bw - 2, 6)
+        $g.FillEllipse($hollow, $x0 + 2, $top + 9, $bw - 4, 4)
+        $g.FillEllipse($greyDark, $x0 + 4, $top + 9, $bw - 8, 2)
+        foreach ($b in $outline, $red, $redDark, $grey, $greyLight, $greyDark, $rim, $hollow, $shadow) { $b.Dispose() }
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
