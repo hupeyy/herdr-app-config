@@ -3,8 +3,8 @@
 #   pokeball-v<V>-still.png   idle
 #   pokeball-v<V>-c<n>.png    an agent works: rocks one way, rocks the other way, bounces once
 #   pokeball-v<V>-s<n>.png    an agent's shell runs: spins on its vertical axis, orbit streaks
-#   pokeball-v<V>-open.png    an agent needs input: half open, a black mouth under the lid
-# Frames are 18x24 (spin frames 23x24) with the ground near the bottom; nearest-neighbour scaling
+#   pokeball-v<V>-open.png    an agent needs input: fully open, the lid's grey inside showing
+# The open ball is 16 rows tall, the closed one 12. Frames are 18x24 (spin frames 23x24) with the ground near the bottom; nearest-neighbour scaling
 # keeps the pixels. Files are named pokeball-v<Version>-...: herdr caches images by path, so a new
 # look needs new names (space-panel's BALL_VERSION passes the version). Earlier looks: ./archive.
 param([Parameter(Mandatory)][string]$Dir, [string]$Version = '16')
@@ -12,10 +12,10 @@ param([Parameter(Mandatory)][string]$Dir, [string]$Version = '16')
 Add-Type -AssemblyName System.Drawing
 
 # The sprite's own colours. K outline, R red, D dark red, P pink highlight, W white, L light grey,
-# A inside of the lid, G shade inside the ball.
+# A inside of the lid, G shade inside the ball, S the lid's shaded inside.
 $palette = @{
     'K' = @(0, 0, 0); 'R' = @(254, 0, 0); 'D' = @(180, 0, 1); 'P' = @(254, 104, 105); 'W' = @(254, 254, 254)
-    'L' = @(180, 180, 180); 'A' = @(162, 162, 162); 'G' = @(139, 139, 139)
+    'L' = @(180, 180, 180); 'A' = @(162, 162, 162); 'G' = @(139, 139, 139); 'S' = @(121, 121, 121)
 }
 function Map-Bitmap($rows) {
     $bmp = New-Object System.Drawing.Bitmap $rows[0].Length, $rows.Count
@@ -42,18 +42,22 @@ $closed = @(
     '..KKLLLLKKK.',
     '....KKKK....'
 )
-$halfOpen = @(
-    '....KKKK....',
-    '..KKWWDDKK..',
-    '.KWWRDDDDDK.',
-    '.KRRRKKDDDK.',
-    'KRRKKWWKKDDK',
-    'KRKAGKKGGKDK',
-    'KKAKKKKKKGK.',
-    'KLKKKKKKKKLK',
+# Open: the lid stands up behind the ball, its grey inside facing us, over the black hollow.
+$fullOpen = @(
+    '....RKKD....',
+    '..RDKWLKDD..',
+    '.RKKAKKSKKD.',
+    '.KAAAASSSSK.',
+    'DAAAAAASSSSD',
+    'KAAAAAASSSSK',
+    'KAAAAASSSSSK',
+    '.KAASSSSSSK.',
+    '..KKSSSSKK..',
+    '.KWKKKKKKLK.',
     'KWKKKKKKKKLK',
-    '.KWWKKKKWLK.',
-    '.KLWWWLLLLK.',
+    'KLKKKKKKKKLK',
+    '.KWKKKKKKLK.',
+    '.KLWWLLLLLK.',
     '..KKLLLLKK..',
     '....KKKK....'
 )
@@ -79,7 +83,7 @@ $button = @(
     '.KK.'
 )
 $ball = Map-Bitmap $closed
-$open = Map-Bitmap $halfOpen
+$open = Map-Bitmap $fullOpen
 $bw = $ball.Width; $bh = $ball.Height
 
 $W = 18; $H = 24; $ground = 22
