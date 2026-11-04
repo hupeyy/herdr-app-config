@@ -3,6 +3,7 @@
 #   pokeball-v<V>-still.png   idle
 #   pokeball-v<V>-c<n>.png    an agent works: rocks one way, rocks the other way, bounces once
 #   pokeball-v<V>-s<n>.png    an agent's shell runs: spins on its vertical axis, orbit streaks
+#   pokeball-v<V>-o<n>.png    an agent starts waiting: closed, half open, open, with a small hop
 #   pokeball-v<V>-open.png    an agent needs input: fully open, the lid's grey inside showing
 # The open ball is 16 rows tall, the closed one 12. Frames are 18x24 (spin frames 23x24) with the ground near the bottom; nearest-neighbour scaling
 # keeps the pixels. Files are named pokeball-v<Version>-...: herdr caches images by path, so a new
@@ -37,9 +38,25 @@ $closed = @(
     'KRRRRKKDDDDK',
     'KKRRKWWKDDKK',
     'KWKKKWWKKKLK',
-    '.KWWWKKLLLKK',
+    '.KWWWKKLLLK.',
     '.KLWWWWLLLK.',
-    '..KKLLLLKKK.',
+    '..KKLLLLKK..',
+    '....KKKK....'
+)
+# Half open (the opening's middle frame): the lid tipped back over a black mouth.
+$halfOpen = @(
+    '....KKKK....',
+    '..KKWWDDKK..',
+    '.KWWRDDDDDK.',
+    '.KRRRKKDDDK.',
+    'KRRKKWWKKDDK',
+    'KRKAGKKGGKDK',
+    'KKAKKKKKKGKK',
+    'KLKKKKKKKKLK',
+    'KWKKKKKKKKLK',
+    '.KWWKKKKWLK.',
+    '.KLWWWLLLLK.',
+    '..KKLLLLKK..',
     '....KKKK....'
 )
 # Open: the lid stands up behind the ball, its grey inside facing us, over the black hollow.
@@ -71,9 +88,9 @@ $bare = @(
     'KRRRRRRDDDDK',
     'KKRRRRDDDDKK',
     'KWKKKKKKKKLK',
-    '.KWWWWWLLLKK',
+    '.KWWWWWLLLK.',
     '.KLWWWWLLLK.',
-    '..KKLLLLKKK.',
+    '..KKLLLLKK..',
     '....KKKK....'
 )
 $button = @(
@@ -83,6 +100,7 @@ $button = @(
     '.KK.'
 )
 $ball = Map-Bitmap $closed
+$half = Map-Bitmap $halfOpen
 $open = Map-Bitmap $fullOpen
 $bw = $ball.Width; $bh = $ball.Height
 
@@ -199,9 +217,17 @@ $i = 0
 foreach ($f in $frames) { Save-Frame $ball $f[0] $f[1] $f[2] $f[3] (Join-Path $Dir "pokeball-v$Version-c$i.png"); $i++ }
 Save-Frame $ball 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-still.png")
 Save-Frame $open 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-open.png")
+# Opening, after the classic sheet: a squash, the lid pops to half open as the ball hops, then
+# it lands fully open. The card then holds open.png.
+$opening = @(
+    @($ball, 0, 1, 1), @($ball, 0, 1.12, 0.88), @($half, 1, 1, 1), @($half, 2, 1, 1),
+    @($open, 1, 1, 1), @($open, 0, 1.08, 0.92), @($open, 0, 1, 1)
+)
+$o = 0
+foreach ($f in $opening) { Save-Frame $f[0] $f[1] $f[2] $f[3] 0 (Join-Path $Dir "pokeball-v$Version-o$o.png"); $o++ }
 $s = 0
 foreach ($angle in $spin) { Save-Spin $angle ($s -lt $spinTurns) (Join-Path $Dir "pokeball-v$Version-s$s.png"); $s++ }
 # space-panel draws the frames again when this marker is missing.
 Set-Content -Path (Join-Path $Dir "pokeball-v$Version-ready") -Value $i
-$ball.Dispose(); $open.Dispose()
+$ball.Dispose(); $half.Dispose(); $open.Dispose()
 "$i"

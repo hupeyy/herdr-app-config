@@ -91,7 +91,7 @@ from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademark
 Creatures and GAME FREAK. This is an unofficial fan mod.
 
 The Poké Ball is the classic 12-pixel sprite (seen from a little above), drawn from maps in
-`mods/space-panel/pokeball-anim.ps1`: still when idle, fully open when
+`mods/space-panel/pokeball-anim.ps1`: still when idle, popping open (closed, half open, open) when
 an agent needs input, rocking one way, the other way, then bouncing while an agent works, and
 spinning on its vertical axis with circular motion streaks while an agent's shell runs. Earlier
 looks (a flat front view, the three-quarter PokeAPI sprite) are kept in `mods/space-panel/archive`.
