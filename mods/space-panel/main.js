@@ -64,7 +64,7 @@ const BALL_SPRITE = `${POKEMON_DIR}/pokeball.png`;
 const BALL_SPRITE_URL = `${SPRITES}/items/poke-ball.png`;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "6"; // 5 added the open ball, 6 the shell spin
+const BALL_VERSION = "7"; // 5 added the open ball, 6 the shell spin, 7 spun on its vertical axis
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;

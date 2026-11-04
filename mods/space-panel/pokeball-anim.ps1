@@ -100,9 +100,14 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
 }
 
 # The shell spin (pokeball-v<V>-s<n>.png), for an agent with a shell still running: one full turn
-# about the ball's centre in 30-degree steps, then a short pause, and again.
+# about the ball's vertical axis through its centre, like a coin spun on a table, in 30-degree
+# steps, then a short pause, and again. A flat sprite cannot turn in 3D, so its width follows
+# cos(angle), down to a sliver edge-on, and it is mirrored while its back faces the viewer.
 $spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
 function Save-Spin($angle, $path) {
+    $cos = [Math]::Cos($angle * [Math]::PI / 180)
+    # GDI+ rejects a zero scale: edge-on stays a sliver one or two pixels wide.
+    $sx = if ([Math]::Abs($cos) -lt 0.12) { 0.12 * [Math]::Sign($cos + 1e-9) } else { $cos }
     $out = New-Object System.Drawing.Bitmap $W, $H
     $g = [System.Drawing.Graphics]::FromImage($out)
     try {
@@ -110,8 +115,9 @@ function Save-Spin($angle, $path) {
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
         $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
         $g.FillEllipse($shadow, [int](($W - $bw) / 2) + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
+        # Narrowed (and mirrored past 90 degrees) about the vertical line through the ball's centre.
         $g.TranslateTransform([single]($W / 2), [single]($ground - $bh / 2))
-        $g.RotateTransform([single]$angle)
+        $g.ScaleTransform([single]$sx, [single]1)
         $g.DrawImage($script:ball, [single](-$bw / 2), [single](-$bh / 2), [single]$bw, [single]$bh)
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
