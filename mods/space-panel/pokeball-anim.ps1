@@ -110,22 +110,27 @@ $spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
 $spinTurns = 12 # the first 12 spin frames turn; the rest are the pause, without streaks
 $SW = 30
 
-# Two short light arcs travelling round a tilted ring at the ball's band, the same way as the
-# button. The half behind the ball is dimmer and drawn under it; the half in front is drawn over
-# it, brightening toward the arc's head. The ring's front is its lower half.
+# Two light arcs travelling round a tilted ring at the ball's band, the same way as the button.
+# The half behind the ball is dimmer and drawn under it; the half in front is drawn over it,
+# bright, brightening toward the arc's head, with a dark pixel under each so it stands out even
+# over the ball's pale lower half. The ring's front is its lower half.
 function Draw-Orbit($g, $phase, $cx, $cy, $rx, $ry, $back) {
+    $edge = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 20, 22, 30))
     for ($k = 0; $k -lt 2; $k++) {
         $t0 = $phase + $k * [Math]::PI
-        for ($j = 0; $j -le 10; $j++) {
+        for ($j = 0; $j -le 14; $j++) {
             $t = $t0 + $j * 0.11
             $front = [Math]::Sin($t) -gt 0
             if ($front -eq $back) { continue }
-            $a = if ($back) { 90 } else { [Math]::Min(255, 120 + 12 * $j) }
-            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int]$a, 235, 242, 255))
-            $g.FillRectangle($b, [int][Math]::Round($cx + $rx * [Math]::Cos($t)), [int][Math]::Round($cy + $ry * [Math]::Sin($t)), 1, 1)
+            $a = if ($back) { [Math]::Min(170, 90 + 6 * $j) } else { [Math]::Min(255, 170 + 8 * $j) }
+            $x = [int][Math]::Round($cx + $rx * [Math]::Cos($t)); $y = [int][Math]::Round($cy + $ry * [Math]::Sin($t))
+            if (-not $back) { $g.FillRectangle($edge, $x, $y + 1, 1, 1) }
+            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int]$a, 225, 245, 255))
+            $g.FillRectangle($b, $x, $y, 1, 1)
             $b.Dispose()
         }
     }
+    $edge.Dispose()
 }
 
 # The PokeAPI sprite's button, in the cropped ball's pixels (the sprite is a fixed file): a white
