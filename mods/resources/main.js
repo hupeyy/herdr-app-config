@@ -11,6 +11,7 @@ import { spaces, panes, terminals, exec, home, theme, closeOverlay, props, share
 const EVERY_MS = 3000; // while the panel is open
 const CACHE = "resources.snapshot"; // { snap, prev }, shared with the status bar chip
 const STALE_MS = 20000;
+const SORT = "resources.sort"; // { key: "name" | "cpu" | "ws", desc }
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 const SCRIPT = () => `${home()}/.config/herdr-app/mods/resources/snapshot.mjs`;
 
@@ -100,8 +101,37 @@ export default class Resources extends View {
       g.sum = g.items.reduce((acc, i) => ({ ws: acc.ws + i.sum.ws, priv: acc.priv + i.sum.priv }), { ws: 0, priv: 0 });
       g.cpu = g.items.reduce((acc, i) => acc + i.cpu, 0);
     }
-    groups.push({ id: "herdr", name: "HERDR", items: [], sum: s.herdr, cpu: this.cpu("herdr", s.herdr) });
-    return groups;
+    for (const g of groups) g.items = this.sorted(g.items);
+    // Herdr's own row stays last, whatever the sort.
+    return [...this.sorted(groups), { id: "herdr", name: "HERDR", items: [], sum: s.herdr, cpu: this.cpu("herdr", s.herdr) }];
+  }
+
+  // Rows by the clicked column (shared "resources.sort", so a reopened panel keeps it).
+  sortBy() {
+    return shared(SORT) ?? { key: "ws", desc: true };
+  }
+
+  sorted(rows) {
+    const { key, desc } = this.sortBy();
+    const value = (r) => (key === "name" ? String(r.name ?? "").toLowerCase() : key === "cpu" ? r.cpu ?? 0 : r.sum?.ws ?? 0);
+    return [...rows].sort((a, b) => {
+      const x = value(a), y = value(b);
+      const order = typeof x === "string" ? x.localeCompare(y) : x - y;
+      return desc ? -order : order;
+    });
+  }
+
+  // A column header: click to sort by it, again to reverse. Names start A to Z, numbers high first.
+  header(t, key, label, width, align) {
+    const { key: on, desc } = this.sortBy();
+    const active = on === key;
+    return h_flex().id(`sort-${key}`).gap(3).items_center().cursor_pointer()
+      .when(width != null, (el) => el.w(width).flex_none()).when(width == null, (el) => el.flex_1())
+      .when(align === "right", (el) => el.justify_end())
+      .text_color(active ? t.foreground : t.dim).hover((s) => s.text_color(t.foreground))
+      .on_click((_e, cx) => { setShared(SORT, { key, desc: active ? !desc : key !== "name" }); cx.notify(); })
+      .child(label)
+      .when(active, (el) => el.child(div().text_size(10).child(desc ? "↓" : "↑")));
   }
 
   bar(t, value) {
@@ -218,7 +248,9 @@ export default class Resources extends View {
     const s = this.snap;
     const allPanes = panes();
     const where = new Map(spaces().flatMap((sp) => sp.tabs.map((tab) => [tab.id, `${sp.name} / ${tab.name}`])));
-    const list = terminals().filter((x) => x.state === "live");
+    const rows = terminals().filter((x) => x.state === "live")
+      .map((x) => ({ x, name: x.title || x.argv?.[0] || x.address, sum: s.roots[x.address], cpu: s.roots[x.address] ? this.cpu(x.address, s.roots[x.address]) : 0 }));
+    const list = this.sorted(rows).map((r) => r.x);
     return v_flex().id("pty-rows").flex_1().min_h(140).overflow_y_scrollbar()
       .children(list.map((x) => {
         const pane = allPanes.find((p) => p.terminal === x.address);
@@ -281,9 +313,9 @@ export default class Resources extends View {
           .child(`${gb(s.total.ws)} Σ WS`).child(div().text_color(t.dim).child("·"))
           .child(`${gb(s.total.priv)} Σ Private`))
         .child(h_flex().h(26).px(12).gap(8).flex_none().items_center().text_size(11.5).text_color(t.dim)
-          .child(div().flex_1().child(this.tab === "ptys" ? "Terminal" : "Name"))
-          .when(this.tab === "resources", (el) => el.child(div().w(46).text_right().child("CPU")).child(div().w(70).text_right().child("WS")))
-          .when(this.tab === "ptys", (el) => el.child(div().w(66).text_right().child("WS")).child(div().w(36))))
+          .child(this.header(t, "name", this.tab === "ptys" ? "Terminal" : "Name", null, "left"))
+          .when(this.tab === "resources", (el) => el.child(this.header(t, "cpu", "CPU", 46, "right")).child(this.header(t, "ws", "WS", 70, "right")))
+          .when(this.tab === "ptys", (el) => el.child(this.header(t, "ws", "WS", 66, "right")).child(div().w(36))))
         .child(this.tab === "ptys" ? this.ptys(t, cx) : this.resources(t)))
       .child(div().p(12).flex_none().border_t(1).border_color(t.border)
         .child(h_flex().id("open-cleanup").h(36).px(12).items_center().rounded(8).border_1().border_color(t.border)
