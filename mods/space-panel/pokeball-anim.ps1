@@ -99,7 +99,26 @@ function Save-Frame($lift, $sx, $sy, $angle, $path) {
     $out.Dispose()
 }
 
-# An opened ball (pokeball-v<V>-open.png), for an agent that finished: the bottom half stays on
+# The shell spin (pokeball-v<V>-s<n>.png), for an agent with a shell still running: one full turn
+# about the ball's centre in 30-degree steps, then a short pause, and again.
+$spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
+function Save-Spin($angle, $path) {
+    $out = New-Object System.Drawing.Bitmap $W, $H
+    $g = [System.Drawing.Graphics]::FromImage($out)
+    try {
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
+        $g.FillEllipse($shadow, [int](($W - $bw) / 2) + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
+        $g.TranslateTransform([single]($W / 2), [single]($ground - $bh / 2))
+        $g.RotateTransform([single]$angle)
+        $g.DrawImage($script:ball, [single](-$bw / 2), [single](-$bh / 2), [single]$bw, [single]$bh)
+    } finally { $g.Dispose() }
+    $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $out.Dispose()
+}
+
+# An opened ball (pokeball-v<V>-open.png), for an agent that needs input: the bottom half stays on
 # the ground and the top half swings up and back on its rear hinge, with light inside.
 function Save-Open($path) {
     # Cut at the band: the darkest row in the middle of the ball.
@@ -140,6 +159,8 @@ foreach ($f in $frames) {
 }
 Save-Frame 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-still.png")
 Save-Open (Join-Path $Dir "pokeball-v$Version-open.png")
+$s = 0
+foreach ($angle in $spin) { Save-Spin $angle (Join-Path $Dir "pokeball-v$Version-s$s.png"); $s++ }
 # space-panel draws the frames again when this marker is missing.
 Set-Content -Path (Join-Path $Dir "pokeball-v$Version-ready") -Value $i
 $ball.Dispose()

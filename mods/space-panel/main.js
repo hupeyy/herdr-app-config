@@ -64,10 +64,13 @@ const BALL_SPRITE = `${POKEMON_DIR}/pokeball.png`;
 const BALL_SPRITE_URL = `${SPRITES}/items/poke-ball.png`;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "5"; // 5 added the open ball
+const BALL_VERSION = "6"; // 5 added the open ball, 6 the shell spin
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
+// An agent with a shell still running: a full turn in 12 frames, then 6 frames of pause.
+const SPIN_FRAMES = 18;
+const spinFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-s${tick % SPIN_FRAMES}.png`;
 
 async function makeBallFrames(dir) {
   if (await readTextFile(`${dir}/pokeball-v${BALL_VERSION}-ready`).catch(() => null)) return true;
@@ -255,12 +258,13 @@ export default class DevWorkspaces extends View {
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
     this.pokemonReady = false;
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
-    // Steps the Poké Ball animation; redraws only while some dev workspace is working.
+    // Steps the Poké Ball animations; redraws only while some dev workspace is working or has a
+    // shell running. One tick serves both cycles (22 and 18 frames).
     this.ballTick = 0;
     this.anyWorking = false;
     cx.timer.every(BALL_TICK_MS, (cx) => {
-      if (!this.anyWorking || !this.pokemonReady) return;
-      this.ballTick = (this.ballTick + 1) % BALL_FRAMES;
+      if (!(this.anyWorking || this.shells.size) || !this.pokemonReady) return;
+      this.ballTick = (this.ballTick + 1) % (BALL_FRAMES * SPIN_FRAMES);
       cx.notify();
     });
     cx.timer.every(WORK_POLL_MS, (cx) => this.pollWork(cx));
@@ -484,13 +488,15 @@ export default class DevWorkspaces extends View {
     const icon = (shared("space.icons") ?? {})[space.id];
     // The space's own mark, like Orca's dot: the Poké Ball open when an agent needs input (a red
     // dot until the art is ready); rocking and hopping while one works (a spinner until then);
-    // else standing still (the color tile until then). Frames are 24x32: ball, room, a shadow.
+    // spinning with a pause while an agent's shell runs (a terminal icon until then); else
+    // standing still (the color tile until then). Frames are 24x32: ball, room, a shadow.
     const ball = (img) => div().w(16).h(21).flex_none().flex().items_end().justify_center().child(img);
     const working = space.status === "working" && this.pokemonReady;
     const mark = space.status === "blocked" && this.pokemonReady ? ball(image(BALL_OPEN).w(16).h(21))
       : space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
       : working ? ball(image(ballFrame(this.ballTick)).w(16).h(21))
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
+      : rows.some((r) => r.shell) && this.pokemonReady ? ball(image(spinFrame(this.ballTick)).w(16).h(21))
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
       : this.pokemonReady ? ball(image(BALL_STILL).w(16).h(21))
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
