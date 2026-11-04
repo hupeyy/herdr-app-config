@@ -79,3 +79,13 @@ works, so an idle one showed the shell icon. `space-panel`, `pane-dev` and `tabs
 shell pane with a `claude.session` label as Claude. `space-panel` also reads each session's
 transcript (`space-panel/scan-work.mjs`) for the tickets it created or was handed and the PRs it
 opened or reviewed. The card's Jira and GitHub buttons open all of them.
+
+## Pokémon
+
+Each dev workspace card shows a Poké Ball and its own Pokémon, after
+[mathieucroset/herdr-pokemon-agents](https://github.com/mathieucroset/herdr-pokemon-agents) (MIT).
+A new dev workspace gets a random one; the Edit dialog picks another (all 1,025, searchable).
+The art is downloaded on first use into `data/pokemon-icons/` and is not in this repo:
+menu icons and item sprites from [PokeAPI/sprites](https://github.com/PokeAPI/sprites), names
+from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
+Creatures and GAME FREAK. This is an unofficial fan mod.

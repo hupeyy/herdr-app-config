@@ -5,8 +5,56 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, agents, terminals, panes, run, theme, shared, setShared, setAgentOrder, knownAgents, props, openOverlay, closeOverlay, exec, home } from "herdr";
+import { spaces, agents, terminals, panes, run, theme, shared, setShared, setAgentOrder, knownAgents, props, openOverlay, closeOverlay, exec, home, appHome, readTextFile, writeTextFile } from "herdr";
 import { fileIcon, isLight } from "./file-icons/icons.js";
+import { NAMES, nameOf, ICON_LAST, iconBox } from "./pokemon-names.js";
+
+// ---- A Pokémon per dev workspace, after mathieucroset/herdr-pokemon-agents (MIT) ----
+// Its menu icons (PokeAPI, gen VII, 40x30) and a Poké Ball (the card's mark) are downloaded on
+// first use into the herdr-app home; none ship with this mod. A new dev workspace gets a random
+// Pokémon nobody else has, saved so it stays; the Edit dialog (space-new) picks another.
+// Saved in shared "space.pokemon" { spaceId: dex number }.
+const POKEMON = "space.pokemon";
+const POKEMON_DIR = "data/pokemon-icons";
+const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites";
+// Menu icons up to #809, then the 96x96 front sprites (no icons exist past Gen 7).
+const iconUrl = (id) => (id <= ICON_LAST ? `${SPRITES}/pokemon/versions/generation-vii/icons/${id}.png` : `${SPRITES}/pokemon/${id}.png`);
+const POKEBALL = `${POKEMON_DIR}/pokeball.png`;
+const POKEBALL_URL = `${SPRITES}/items/poke-ball.png`;
+const POKEMON_COUNT = NAMES.length;
+const POKEMON_READY = "ready-3"; // 2 added the Poké Ball, 3 every Pokémon: older downloads are completed once
+const POKEMON_BATCH = 150; // files per curl call, under herdr's 30 s exec limit
+
+// Saved picks first; a new dev workspace gets a random Pokémon that no other one has.
+function pokemonFor(ids) {
+  const saved = shared(POKEMON) ?? {};
+  const fresh = {};
+  const used = new Set(Object.values(saved));
+  for (const id of ids) {
+    if (saved[id]) continue;
+    const free = NAMES.map((_, i) => i + 1).filter((n) => !used.has(n));
+    const n = free.length ? free[Math.floor(Math.random() * free.length)] : Math.floor(Math.random() * POKEMON_COUNT) + 1;
+    fresh[id] = n;
+    used.add(n);
+  }
+  if (Object.keys(fresh).length) setShared(POKEMON, { ...saved, ...fresh });
+  return { ...saved, ...fresh };
+}
+
+async function ensurePokemonIcons() {
+  const dir = `${appHome()}/${POKEMON_DIR}`;
+  if (await readTextFile(`${dir}/${POKEMON_READY}`).catch(() => null)) return true;
+  const files = [[`${appHome()}/${POKEBALL}`, POKEBALL_URL]];
+  for (let id = 1; id <= POKEMON_COUNT; id++) files.push([`${dir}/${id}.png`, iconUrl(id)]);
+  for (let i = 0; i < files.length; i += POKEMON_BATCH) {
+    const args = ["-sfL", "--retry", "2", "--connect-timeout", "10", "--parallel", "--parallel-max", "16", "--create-dirs"];
+    for (const [file, url] of files.slice(i, i + POKEMON_BATCH)) args.push("-o", file, url);
+    const r = await exec("curl", args).catch(() => null);
+    if (r?.code !== 0) return false;
+  }
+  await writeTextFile(`${dir}/${POKEMON_READY}`, String(Date.now()), null).catch(() => null);
+  return true;
+}
 
 // The Jira and GitHub marks (Simple Icons, CC0), as in the Tasks board (mods/tasks/brand.js).
 const JIRA = "mods/file-icons/brand/jira.svg";
@@ -181,6 +229,8 @@ export default class DevWorkspaces extends View {
     cx.timer.every(200, (cx) => { if (this.pending.length) cx.notify(); });
     this.shells = new Map(); // terminal address -> { count, cmd }
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
+    this.pokemonReady = false;
+    cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
     cx.timer.every(WORK_POLL_MS, (cx) => this.pollWork(cx));
     this.pollWork(cx);
     this.subagents = new Map(); // claude session id -> its subagents (scan-agents.mjs)
@@ -400,10 +450,12 @@ export default class DevWorkspaces extends View {
     const folder = mine.find((p) => p.cwd)?.cwd ?? space.folder;
     const fill = fillOf(t, (shared("space.colors") ?? {})[space.id] ?? "ansi6");
     const icon = (shared("space.icons") ?? {})[space.id];
-    // The space's own mark, like Orca's dot: red when an agent needs you, spinning while one works.
+    // The space's own mark, like Orca's dot: red when an agent needs you, spinning while one works,
+    // else a Poké Ball (the color tile while the Pokémon art is still downloading).
     const mark = space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
+      : this.pokemonReady ? image(POKEBALL).w(16).h(16).flex_none()
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
         .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color("#ffffff")));
     const latest = rows.filter((r) => r.status).sort((a, b) => (b.at ?? 0) - (a.at ?? 0))[0];
@@ -439,6 +491,7 @@ export default class DevWorkspaces extends View {
       })
       .child(h_flex().px(4).gap(7).items_center()
         .child(mark)
+        .when(this.pokemonReady && Boolean(this.pokemon?.[space.id]), (el) => el.child(this.pokemonButton(space, title)))
         .child(div().flex_1().min_w(0).truncate().text_size(13.5).font_semibold().text_color(t.foreground).tooltip(title).child(title))
         .when(isLocked(space.id), (el) => el.child(this.iconButton(t, `lock-${space.id}`, "mods/file-icons/ui/lock.svg",
           "Locked: it cannot be closed, and its tabs stay here. Click to unlock.", () => setLocked(space.id, false), true, t.muted)))
@@ -465,6 +518,20 @@ export default class DevWorkspaces extends View {
           }))))
         .children(rows.length ? rows.map((r) => this.row(t, r))
           : [div().px(6).py(4).text_size(12).text_color(t.dim).child("No tabs yet. Add one with +.")]));
+  }
+
+  // The dev workspace's Pokémon beside its title; a click opens the Edit dialog to pick another.
+  pokemonButton(space) {
+    const n = this.pokemon[space.id];
+    const box = iconBox(n, 20);
+    return div().id(`poke-${space.id}`).w(27).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
+      .tooltip(`${nameOf(n)}: click to change`)
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 680, props: { edit: space.id } });
+      })
+      .child(image(`${POKEMON_DIR}/${n}.png`).w(box.w).h(box.h));
   }
 
   arm(e) {
@@ -630,6 +697,7 @@ export default class DevWorkspaces extends View {
     if (props()?.newMenu) return this.newMenu(t);
     if (props()?.rowMenu) return this.rowMenu(t);
     if (props()?.moveConfirm) return this.moveConfirm(t);
+    this.pokemon = pokemonFor(spaces().map((s) => s.id));
 
     const request = shared(MOVE_REQUEST);
     if (request && Number(request.at) > this.lastMove) {

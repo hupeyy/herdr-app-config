@@ -2,11 +2,12 @@
 //   (none)            New workspace: a root (folder, name, color, icon) and its first dev workspace
 //   { editRoot: id }  Edit workspace: a root's name, folder, color, icon
 //   { newDev: id }    New dev workspace in that root: name, folder, color, icon, what it starts with
-//   { edit: spaceId } Edit dev workspace: name, color, icon
+//   { edit: spaceId } Edit dev workspace: name, color, icon, Pokémon
 // A dev workspace is a herdr space. space.new returns no id, so a new one's color, icon and root
 // wait in shared("space.pending"), which the root strip (space-tabs) applies once it appears.
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
+import { NAMES, nameOf, dexNo, iconBox } from "./pokemon-names.js";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { spaces, focused, run, theme, home, appHome, props, closeOverlay, shared, setShared, pickFolder, knownAgents, readTextFile, exec } from "herdr";
 
@@ -18,6 +19,10 @@ const BRAND = { jira: "mods/file-icons/brand/jira.svg", github: "mods/file-icons
 const ICON = (name) => BRAND[name] ?? `mods/workspace-chrome/${name}.svg`;
 const basename = (path) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 const roots = () => shared("roots") ?? [];
+// A dev workspace's Pokémon (space-panel draws it; icons downloaded there on first use).
+const POKEMON = "space.pokemon";
+const POKEMON_ICON = (n) => `data/pokemon-icons/${n}.png`;
+const POKE_SHOWN = 240;
 
 export default class WorkspaceDialog extends View {
   init(_props, cx) {
@@ -47,6 +52,9 @@ export default class WorkspaceDialog extends View {
       if (this.space.named) this.name.set_value(this.space.name);
       this.color = (shared("space.colors") ?? {})[this.space.id] ?? "ansi6";
       this.icon = (shared("space.icons") ?? {})[this.space.id] ?? null;
+      this.pokemon = (shared(POKEMON) ?? {})[this.space.id] ?? null;
+      this.pokeSearch = InputState.new({ placeholder: "Search by name or number" });
+      this.pokeSearch.on("change", (_e, cx) => cx.notify());
     }
     this.start = null; // null: a shell; else an agent from knownAgents()
     this.agents = [];
@@ -98,6 +106,7 @@ export default class WorkspaceDialog extends View {
         const icons = { ...(shared("space.icons") ?? {}) };
         if (this.icon) icons[s.id] = this.icon; else delete icons[s.id];
         setShared("space.icons", icons);
+        if (this.pokemon) setShared(POKEMON, { ...(shared(POKEMON) ?? {}), [s.id]: this.pokemon });
       }
       this.close();
       return;
@@ -121,6 +130,37 @@ export default class WorkspaceDialog extends View {
       }
       this.close();
     });
+  }
+
+  // Edit mode: the dev workspace's Pokémon, a Random pick, and a searchable grid of every one.
+  // The grid draws at most POKE_SHOWN matches; the search finds the rest.
+  pokemonSection(t) {
+    const q = this.pokeSearch.value().trim().toLowerCase();
+    const matches = NAMES.map((label, i) => ({ id: i + 1, label }))
+      .filter((x) => !q || x.label.toLowerCase().includes(q) || String(x.id) === q.replace(/^#?0*/, ""));
+    const shown = matches.slice(0, POKE_SHOWN);
+    const icon = (n, height) => { const b = iconBox(n, height); return image(POKEMON_ICON(n)).w(b.w).h(b.h); };
+    const random = () => {
+      const taken = new Set(Object.entries(shared(POKEMON) ?? {}).filter(([id]) => id !== this.space?.id).map(([, n]) => n));
+      const free = NAMES.map((_, i) => i + 1).filter((n) => !taken.has(n) && n !== this.pokemon);
+      this.pokemon = free[Math.floor(Math.random() * free.length)] ?? this.pokemon;
+    };
+    return v_flex().gap(8)
+      .child(h_flex().gap(10).items_center()
+        .when(Boolean(this.pokemon), (el) => el.child(icon(this.pokemon, 30)))
+        .child(div().flex_1().text_color(t.foreground).child(this.pokemon ? `${dexNo(this.pokemon)} ${nameOf(this.pokemon)}` : "None yet"))
+        .child(this.chip(t, "poke-random", "Random", false, random)))
+      .child(h_flex().child(this.field(t, this.pokeSearch)))
+      .child(div().id("poke-grid").h(180).overflow_y_scrollbar().rounded(7).border_1().border_color(t.border).p(4)
+        .child(h_flex().flex_wrap().gap(2)
+          .children(shown.map((x) => div().id(`poke-${x.id}`).w(46).h(36).flex().items_center().justify_center().rounded(6)
+            .cursor_pointer().tooltip(`${dexNo(x.id)} ${x.label}`)
+            .when(x.id === this.pokemon, (el) => el.bg(t.selected).border_1().border_color(t.accent))
+            .hover((s) => s.bg(t.hover))
+            .on_click((_e, cx) => { this.pokemon = x.id; cx.notify(); })
+            .child(icon(x.id, 30)))))
+        .when(matches.length > shown.length, (el) => el.child(div().pt(4).text_size(11).text_color(t.dim)
+          .child(`Showing ${shown.length} of ${matches.length}: search to find the rest.`))));
   }
 
   section(t, label, child) {
@@ -185,6 +225,7 @@ export default class WorkspaceDialog extends View {
             .text_color(this.icon === name ? t.foreground : t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(name)
             .on_click((_e, cx) => { this.icon = name; cx.notify(); })
             .child(svg(ICON(name)).size(15))))))
+        .when(this.mode === "edit" && Boolean(this.pokeSearch), (el) => el.child(this.section(t, "Pokémon", this.pokemonSection(t))))
         .when(showStart, (el) => el.child(this.section(t, "Start with", v_flex().gap(8)
           .child(h_flex().gap(6).flex_wrap()
             .child(this.chip(t, "start-shell", "Shell", this.start === null, () => { this.start = null; }, svg(ICON("terminal")).size(13)))

@@ -123,7 +123,7 @@ export default class Menu extends View {
       if (all[it[2].id]) delete all[it[2].id]; else all[it[2].id] = true;
       setShared(LOCKED, all);
     }
-    else if (it[1] === "space-edit") openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 420, props: { edit: it[2].id } });
+    else if (it[1] === "space-edit") openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 680, props: { edit: it[2].id } });
     else run(it[1], it[2]);
   }
 
