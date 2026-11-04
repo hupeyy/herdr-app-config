@@ -1,7 +1,8 @@
-// One Claude subagent as a tab: what it was asked, what it is doing now, and each step it took,
-// newest first. Opened from a session's child row in the sidebar (space-panel).
-// props: { path, id, type, description }: path is the subagent's transcript, which Claude Code
-// writes beside its session's (<session>/subagents/agent-<id>.jsonl). The tab follows it live.
+// A Claude subagent as a tab: what it was asked, what it is doing now, and each step it took,
+// newest first. One such tab per dev workspace, reused: a click on a subagent's row in the
+// sidebar (space-panel) points it at that agent through shared "agent.view" { paneId: target }.
+// target / props: { path, id, type, description }; path is the subagent's transcript, which
+// Claude Code writes beside its session's (<session>/subagents/agent-<id>.jsonl). Followed live.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
@@ -10,6 +11,7 @@ import { readTextFile, watchFolder, theme, props, shared, setShared, panes, focu
 // { paneId: agentId } for every open agent tab, so the sidebar focuses a tab instead of opening
 // a second one. herdr keeps no mod props we can read back.
 const TABS = "agent.tabs";
+const VIEW = "agent.view";
 const SHOWN_STEPS = 150;
 const RESULT_LINES = 8;
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
@@ -65,41 +67,60 @@ export function parse(text) {
 
 export default class AgentView extends View {
   init(_props, cx) {
-    const p = props() ?? {};
-    this.path = p.path ?? "";
+    this.closed = false;
+    this.gen = 0;
+    this.show(this.target(), cx);
+    // Appends come in bursts: a change marks the view stale and this reloads at most every 300 ms.
+    // The same tick picks up a new target from the sidebar.
+    cx.timer.every(300, (cx) => {
+      const next = this.target();
+      if (next.path !== this.path) this.show(next, cx);
+      else if (this.stale) this.load(cx);
+    });
+  }
+
+  // The agent this tab shows: the sidebar's latest pick for this pane, else the props it opened with.
+  target() {
+    const pane = this.myPane();
+    return (pane && (shared(VIEW) ?? {})[pane]) || props() || {};
+  }
+
+  show(target, cx) {
+    this.info = target;
+    this.path = target.path ?? "";
     this.data = { prompt: "", steps: [] };
     this.finished = false;
     this.error = null;
     this.showPrompt = false;
-    this.stale = true;
-    this.closed = false;
     this.load(cx);
-    // Appends come in bursts: a change marks the view stale and this reloads at most once a second.
-    cx.timer.every(1000, (cx) => { if (this.stale) this.load(cx); });
     this.watch(cx);
   }
 
   load(cx) {
     this.stale = false;
+    const path = this.path;
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(this.path);
+        const text = await readTextFile(path);
+        if (path !== this.path) return; // switched to another agent meanwhile
         if (text === null) { this.error = "The transcript is gone (the session was cleaned up)."; cx.notify(); return; }
         this.data = parse(text);
-        const meta = await readTextFile(this.path.replace(/\.jsonl$/, ".meta.json")).catch(() => null);
+        const meta = await readTextFile(path.replace(/\.jsonl$/, ".meta.json")).catch(() => null);
         try { this.finished = JSON.parse(meta ?? "{}").finished === true; } catch {}
         this.error = null;
-      } catch (e) { this.error = String(e.message ?? e); }
+      } catch (e) { if (path === this.path) this.error = String(e.message ?? e); }
       cx.notify();
     });
   }
 
+  // One watch per shown agent: a switch starts a new generation and the old loop ends.
   watch(cx) {
+    const gen = ++this.gen;
     const dir = this.path.replace(/[\\/][^\\/]+$/, "");
     cx.spawn(async () => {
-      while (!this.closed && !this.finished) {
+      while (!this.closed && gen === this.gen && !this.finished) {
         try { await watchFolder(dir); } catch { return; }
-        this.stale = true;
+        if (gen === this.gen) this.stale = true;
       }
     });
   }
@@ -119,8 +140,12 @@ export default class AgentView extends View {
     if (!pane) return;
     const live = new Set(panes().map((p) => p.pane));
     const next = Object.fromEntries(Object.entries(shared(TABS) ?? {}).filter(([id]) => live.has(id)));
-    next[pane] = props()?.id ?? "";
+    next[pane] = this.info?.id ?? "";
     if (JSON.stringify(next) !== JSON.stringify(shared(TABS))) setShared(TABS, next);
+    const views = shared(VIEW) ?? {};
+    if (Object.keys(views).some((id) => !live.has(id))) {
+      setShared(VIEW, Object.fromEntries(Object.entries(views).filter(([id]) => live.has(id))));
+    }
   }
 
   step(t, s, i) {
@@ -145,7 +170,7 @@ export default class AgentView extends View {
 
   render() {
     const t = theme();
-    const p = props() ?? {};
+    const p = this.info ?? {};
     this.record();
     const { prompt, steps } = this.data;
     const now = [...steps].reverse().find((s) => s.kind === "tool" || s.kind === "text");

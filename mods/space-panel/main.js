@@ -21,6 +21,8 @@ const DRAG_START_PX = 6;
 const AGENT_POLL_MS = 5000;
 // { paneId: agentId } written by each agent-view tab, so a click focuses an open one.
 const AGENT_TABS = "agent.tabs";
+// { paneId: { path, id, type, description } }: which agent each agent-view tab shows.
+const AGENT_VIEW = "agent.view";
 // Tickets and PRs the dev workspace's Claude sessions work on (see pollWork).
 const WORK = "space.work";
 const WORK_POLL_MS = 20000;
@@ -229,14 +231,17 @@ export default class DevWorkspaces extends View {
     });
   }
 
-  // A subagent opens as a tab in its dev workspace (mod agent-view); a second click focuses it.
-  openAgent(space, a) {
+  // A subagent shows in its dev workspace's one agent tab (mod agent-view): the tab is reused and
+  // pointed at this agent (shared "agent.view"), and made only when the workspace has none.
+  openAgent(space, a, viewer) {
+    const target = { path: a.path, id: a.id, type: a.type, description: a.description };
+    const name = (a.description || a.type).slice(0, 40);
     run("space.select", { id: space.id });
-    const paneId = Object.entries(shared(AGENT_TABS) ?? {}).find(([, id]) => id === a.id)?.[0];
-    const pane = paneId ? panes().find((p) => p.pane === paneId) : null;
-    if (pane) { run("tab.select", { id: pane.tab }); run("pane.focus", { pane: pane.pane }); return; }
-    run("tab.new", { space: space.id, mod: "agent-view", name: (a.description || a.type).slice(0, 40),
-      props: { path: a.path, id: a.id, type: a.type, description: a.description } });
+    if (!viewer) { run("tab.new", { space: space.id, mod: "agent-view", name, props: target }); return; }
+    setShared(AGENT_VIEW, { ...(shared(AGENT_VIEW) ?? {}), [viewer.pane]: target });
+    run("tab.rename", { id: viewer.tab, name });
+    run("tab.select", { id: viewer.tab });
+    run("pane.focus", { pane: viewer.pane });
   }
 
   // Each live Claude session's tickets and PRs (scan-work.mjs reads its transcript), filed under
@@ -295,7 +300,11 @@ export default class DevWorkspaces extends View {
   // its panes; agents' live sub-agents (terminals they started with `hc run`) nest under them.
   childRows(space, ctx) {
     const { allPanes, all, byAddress } = ctx;
-    const mine = allPanes.filter((p) => space.tabs.some((x) => x.id === p.tab));
+    // The agent viewer tab is not a child of its own: the subagent's row stands for it.
+    const mine = allPanes.filter((p) => p.mod !== "agent-view" && space.tabs.some((x) => x.id === p.tab));
+    const viewer = allPanes.find((p) => p.mod === "agent-view" && space.tabs.some((x) => x.id === p.tab));
+    const showing = viewer ? (shared(AGENT_TABS) ?? {})[viewer.pane] : null;
+    const viewerOn = Boolean(viewer && space.active && space.tabs.find((x) => x.id === viewer.tab)?.active);
     const statusOf = (raw, fallback) => (typeof raw?.status === "string" ? raw.status : raw?.status?.state) ?? fallback ?? "idle";
     const msgOf = (raw) => raw?.report?.msg ?? raw?.status?.msg ?? "";
     const go = (pane) => () => { run("space.select", { id: space.id }); run("tab.select", { id: pane.tab }); run("pane.focus", { pane: pane.pane }); };
@@ -312,7 +321,7 @@ export default class DevWorkspaces extends View {
         rows.push({
           id: `agent-${a.id}`, depth, status: a.running ? "working" : "done", program: CLAUDE,
           name: a.description || a.type, msg: a.running ? a.activity : `${a.type}, finished`, at: a.at,
-          focused: false, onClick: () => this.openAgent(space, a),
+          focused: viewerOn && showing === a.id, onClick: () => this.openAgent(space, a, viewer),
         });
       }
       for (const k of all.filter((x) => x.parent === address && x.state === "live")) {
@@ -366,6 +375,7 @@ export default class DevWorkspaces extends View {
 
   card(t, space, ctx) {
     const { rows, mine } = this.childRows(space, ctx);
+    const tabCount = new Set(mine.map((p) => p.tab)).size; // the agent viewer tab is not counted
     const open = this.expanded.get(space.id) ?? space.active;
     const spaceAgents = ctx.allAgents.filter((a) => a.space === space.id);
 
@@ -449,7 +459,7 @@ export default class DevWorkspaces extends View {
       .when(!open, (el) => el.when(Boolean(latest), (el) => el.child(this.row(t, { ...latest, depth: 0 }))))
       .when(open, (el) => el
         .child(h_flex().px(4).pt(3).gap(4).items_center()
-          .child(div().flex_1().text_size(12).text_color(t.dim).child(`${space.tabs.length} tab${space.tabs.length === 1 ? "" : "s"}`))
+          .child(div().flex_1().text_size(12).text_color(t.dim).child(`${tabCount} tab${tabCount === 1 ? "" : "s"}`))
           .child(this.iconButton(t, `add-${space.id}`, "plus", "Add to this dev workspace", () => openOverlay({
             mod: "space-panel", kind: "popup", width: 240, height: menuHeight, props: { addMenu: { space: space.id, active: space.active, folder } },
           }))))
