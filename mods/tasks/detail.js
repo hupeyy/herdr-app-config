@@ -77,12 +77,13 @@ const pill = (t, label, tone) =>
 
 // ---- Jira ticket drawer ----
 
-export function ticketDrawer(view, t, cx, key) {
+// full: the ticket fills its own tab; otherwise it is a drawer beside the board.
+export function ticketDrawer(view, t, cx, key, { full = false } = {}) {
   const entry = load(view, cx, `jira:${key}`, () => fetchIssue(key));
   const snap = snapshot();
   const base = entry.data;
-  const shell = v_flex().id("drawer").w(0.58 * (view.size?.width ?? 1400)).flex_none().h_full().min_h(0)
-    .bg(t.popover).border_l(1).border_color(t.border);
+  const shell = (full ? v_flex().id("drawer").flex_1().min_w(0) : v_flex().id("drawer").w(0.58 * (view.size?.width ?? 1400)).flex_none().border_l(1))
+    .h_full().min_h(0).bg(t.popover).border_color(t.border);
   if (!base) {
     return shell.child(h_flex().p(16).justify_between()
       .child(div().text_color(entry.error ? ink(t, "blocked", t.popover) : t.dim).child(entry.error ?? `Loading ${key}…`))
@@ -163,9 +164,9 @@ export function ticketDrawer(view, t, cx, key) {
 }
 
 function closeX(view, t) {
-  return div().id("drawer-close").p(4).rounded(5).text_color(t.dim).cursor_pointer().tooltip("Close (Esc)")
+  return div().id("drawer-close").p(4).rounded(5).text_color(t.dim).cursor_pointer().tooltip("Close this tab")
     .hover((s) => s.bg(t.hover).text_color(t.foreground))
-    .on_click((_e, cx) => { view.detail = null; cx.notify(); })
+    .on_click((_e, cx) => { if (view.closeTab && view.detail) view.closeTab(view.detail, cx); else { view.detail = null; cx.notify(); } })
     .child(svg(ICON("x")).size(14));
 }
 

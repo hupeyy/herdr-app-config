@@ -11,6 +11,9 @@ import { spaces, focused, panes, props, theme, layout, closeOverlay, run, shared
 // the board with mod.open (the same toggle as ctrl-shift-j) only when none holds the lease.
 const BOARD = "tasks.board";
 const REQUEST = "tasks.request";
+// The tickets and PRs open as tabs in the board, in tab order.
+const OPEN = "tasks.open";
+const tabId = (x) => (x.kind === "ticket" ? `t:${x.key}` : `p:${x.url}`);
 const BOARD_LEASE_MS = 40000;
 const boardOpen = () => Date.now() - (shared(BOARD)?.at ?? 0) < BOARD_LEASE_MS;
 import { POLL_MS, STALE_MS, snapshot, refresh, forBranch, withMoves, moveTicket } from "./data.js";
@@ -95,6 +98,9 @@ export default class Tasks extends View {
       // A request younger than a few seconds is the click that opened this board.
       const request = shared(REQUEST);
       this.seenRequest = request?.at ?? 0;
+      // Open tickets and PRs are tabs (shared "tasks.open", so a reopened board keeps them);
+      // this.detail is the shown one, null for the Board tab.
+      this.open = (shared(OPEN) ?? []).filter((x) => x?.kind);
       this.detail = null;
       if (request && Date.now() - request.at < 5000) this.takeRequest(request.target);
       this.holdBoard();
@@ -127,12 +133,67 @@ export default class Tasks extends View {
       .child(div().text_color(t.dim).child(String(count)));
   }
 
-  // A request opens a ticket or PR ({ kind, ... }), or one of the board's tabs ({ tab }).
+  // A request opens a ticket or PR ({ kind, ... }), several at once ({ targets: [...] }, from a
+  // dev workspace's Jira or GitHub button), or one of the board's lists ({ tab }).
   takeRequest(target) {
+    if (target?.targets) this.openTabs(target.targets);
+    else if (target?.tab) { this.tab = target.tab; this.detail = null; }
+    else if (target?.kind) this.openTabs([target]);
+  }
+
+  // Adds each target as a tab (an open one is reused) and shows the first.
+  openTabs(targets) {
+    const list = targets.filter((x) => x?.kind);
+    if (!list.length) return;
+    for (const x of list) if (!this.open.some((o) => tabId(o) === tabId(x))) this.open.push(x);
+    setShared(OPEN, this.open);
+    this.show(this.open.find((o) => tabId(o) === tabId(list[0])));
+  }
+
+  show(target) {
+    this.detail = target ?? null;
     this.prTab = "conversation";
     this.prFile = null;
-    if (target?.tab) { this.tab = target.tab; this.detail = null; }
-    else this.detail = target ?? null;
+  }
+
+  closeTab(target, cx) {
+    const i = this.open.findIndex((o) => tabId(o) === tabId(target));
+    if (i < 0) return;
+    this.open.splice(i, 1);
+    setShared(OPEN, this.open);
+    if (this.detail && tabId(this.detail) === tabId(target)) this.show(this.open[Math.min(i, this.open.length - 1)] ?? null);
+    cx.notify();
+  }
+
+  // Board, then one tab per open ticket or PR, like browser tabs.
+  tabStrip(t) {
+    const snap = snapshot();
+    const label = (x) => (x.kind === "ticket" ? x.key : (() => {
+      const m = x.url?.match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/);
+      return m ? `${m[1]} #${m[2]}` : "Pull request";
+    })());
+    const tip = (x) => (x.kind === "ticket"
+      ? `${x.key} ${snap?.tickets?.find((k) => k.key === x.key)?.summary ?? ""}`
+      : [...(snap?.mine ?? []), ...(snap?.review ?? [])].find((p) => p.url === x.url)?.title ?? x.url);
+    const tab = (id, active, children, onClick, onClose) => h_flex().id(id).h(28).pl(10).pr(onClose ? 4 : 10).gap(6).flex_none()
+      .items_center().rounded(7).cursor_pointer().max_w(220)
+      .bg(active ? t.selected : t.popover).text_color(active ? t.foreground : t.muted).hover((s) => s.bg(active ? t.selected : t.hover))
+      .on_click((_e, cx) => { onClick(); cx.notify(); })
+      .children(children)
+      .when(Boolean(onClose), (el) => el.child(div().id(`${id}-x`).p(2).rounded(4).text_color(t.dim)
+        .hover((s) => s.bg(t.raised).text_color(t.foreground))
+        .on_click((_e, cx) => { cx.stop_propagation(); onClose(cx); })
+        .child(svg(ICON("x")).size(11))));
+    return h_flex().id("open-tabs").px(10).h(40).flex_none().gap(4).items_center().border_b(1).border_color(t.border).overflow_x_scrollbar()
+      .child(tab("open-board", !this.detail, [svg(ICON("layers")).size(13), div().child("Board")], () => this.show(null)))
+      .children(this.open.map((x) => tab(`open-${tabId(x)}`, Boolean(this.detail) && tabId(this.detail) === tabId(x),
+        [brand(t, x.kind === "ticket" ? "jira" : "github", 13, t.popover), div().truncate().tooltip(tip(x)).child(label(x))],
+        () => this.show(x), (cx) => this.closeTab(x, cx))))
+      .when(this.open.length > 1, (el) => el.child(div().flex_1()).child(div().id("close-all-tabs").px(8).h(26).flex_none()
+        .flex().items_center().rounded(6).text_size(11.5).text_color(t.dim).cursor_pointer()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click((_e, cx) => { this.open = []; setShared(OPEN, []); this.show(null); cx.notify(); })
+        .child("Close all")));
   }
 
   holdBoard() {
@@ -150,7 +211,7 @@ export default class Tasks extends View {
       if (!open) run("mod.open", { name: "tasks" });
       return;
     }
-    else { this.detail = target; this.prTab = "conversation"; this.prFile = null; cx.notify(); }
+    else { this.openTabs([target]); cx.notify(); }
   }
 
   row(t, id, target, cells) {
@@ -287,10 +348,12 @@ export default class Tasks extends View {
       this.header(t, g.id, g.label, g.items.length, g.tone),
       ...(this.folded.has(g.id) ? [] : g.items.map(g.draw)),
     ]);
-    if (this.detail?.kind === "pr") {
-      return this.boardFrame(t).child(prPage(this, t, cx, this.detail.url));
+    const frame = this.boardFrame(t).child(this.tabStrip(t));
+    if (this.detail?.kind === "pr") return frame.child(div().flex_1().min_h(0).child(prPage(this, t, cx, this.detail.url)));
+    if (this.detail?.kind === "ticket") {
+      return frame.child(h_flex().flex_1().min_h(0).child(ticketDrawer(this, t, cx, this.detail.key, { full: true })));
     }
-    return this.boardFrame(t)
+    return frame
       .child(h_flex().px(18).pt(14).pb(4).flex_none().items_center().gap(10)
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Tasks"))
         .child(div().flex_1().text_size(11.5).text_color(snap?.errors?.length ? ink(t, "blocked", paper) : t.dim)
@@ -311,8 +374,7 @@ export default class Tasks extends View {
           .when(this.tab === "jira", (el) => el.child(toolbar(this, t, snap)).child(div().flex_1().min_h(0).pt(6).child(jiraBody(this, t, snap))))
           .when(this.tab !== "jira", (el) => el.child(v_flex().id("board-list").flex_1().min_h(0).px(10).pb(10).overflow_y_scrollbar()
             .when(!snap, (el) => el.child(div().p(12).text_color(t.dim).child("Loading Jira and GitHub…")))
-            .children(rows))))
-        .when(this.detail?.kind === "ticket", (el) => el.child(ticketDrawer(this, t, cx, this.detail.key))));
+            .children(rows)))));
   }
 
   // The board's root: focus, keys and size. The size sets the ticket drawer's width.

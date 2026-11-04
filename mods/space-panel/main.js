@@ -28,11 +28,9 @@ const WORK = "space.work";
 const WORK_POLL_MS = 20000;
 const uniqueBy = (list, keyOf) => list.filter((x, i) => x && list.findIndex((y) => y && keyOf(y) === keyOf(x)) === i);
 
-// One target opens in the Tasks board; several open together in the browser.
-function openAll(cx, targets, fallback) {
-  if (!targets.length) { openTask(fallback); return; }
-  if (targets.length === 1 || targets.some((x) => !x.url)) { openTask(targets[0]); return; }
-  for (const x of targets) cx.open_url(x.url);
+// Every target opens as its own tab in the Tasks board; with none, the board opens on a list.
+function openAll(_cx, targets, fallback) {
+  openTask(targets.length ? { targets } : fallback);
 }
 function setLocked(id, on) {
   const all = { ...(shared(LOCKED) ?? {}) };
