@@ -6,9 +6,11 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, terminals, exec, home, theme, closeOverlay, props, shared, run } from "herdr";
+import { spaces, panes, terminals, exec, home, theme, closeOverlay, props, shared, setShared, run } from "herdr";
 
-const EVERY_MS = 3000;
+const EVERY_MS = 3000; // while the panel is open
+const CACHE = "resources.snapshot"; // { snap, prev }, shared with the status bar chip
+const STALE_MS = 20000;
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 const SCRIPT = () => `${home()}/.config/herdr-app/mods/resources/snapshot.mjs`;
 
@@ -39,7 +41,11 @@ export default class Resources extends View {
     this.view = "main"; // or "cleanup"
     this.picked = new Set(); // dev workspaces ticked in the clean-up list
     this.closeArmed = false;
-    this.refresh(cx);
+    // Open on the cache the status bar chip keeps (status-usage measures every 20 s); measure at
+    // once only when it is missing or older than that.
+    const cached = shared(CACHE);
+    if (cached?.snap) { this.snap = cached.snap; this.prev = cached.prev; }
+    if (!cached?.snap || Date.now() - cached.snap.at > STALE_MS) this.refresh(cx);
     cx.timer.every(EVERY_MS, (cx) => this.refresh(cx));
   }
 
@@ -53,6 +59,7 @@ export default class Resources extends View {
         this.prev = this.snap;
         this.snap = next;
         this.error = null;
+        setShared(CACHE, { snap: next, prev: this.prev });
       } catch (e) { this.error = String(e.message ?? e); }
       this.busy = false;
       cx.notify();

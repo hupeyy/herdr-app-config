@@ -11,6 +11,7 @@ import { spaces, agents, terminals, theme, run, window, keys, home, readTextFile
 // process tree plus Herdr's own, and the live terminal count. A click opens mod "resources".
 // mods/resources/snapshot.mjs measures it (a mod cannot import from another mod's folder).
 const RESOURCES_EVERY_MS = 20000;
+const RESOURCES_CACHE = "resources.snapshot"; // { snap, prev }: the last two measurements
 
 const URL = "https://api.anthropic.com/api/oauth/usage";
 const CACHE = "usage.claude";
@@ -46,7 +47,8 @@ export default class StatusUsage extends View {
     this.nextAt = 0;
     this.tick(cx);
     cx.timer.every(60000, (cx) => { this.tick(cx); cx.notify(); });
-    this.memory = null;
+    const cached = shared(RESOURCES_CACHE)?.snap;
+    this.memory = cached ? { ws: cached.total.ws, ptys: Object.keys(cached.roots).length } : null;
     this.measure(cx);
     cx.timer.every(RESOURCES_EVERY_MS, (cx) => this.measure(cx));
   }
@@ -58,7 +60,13 @@ export default class StatusUsage extends View {
     cx.spawn(async (cx) => {
       try {
         const r = await exec("node", [`${home()}/.config/herdr-app/mods/resources/snapshot.mjs`, JSON.stringify(roots)]);
-        if (r.code === 0) { this.memory = { ws: JSON.parse(r.stdout).total.ws, ptys: roots.length }; cx.notify(); }
+        if (r.code === 0) {
+          const snap = JSON.parse(r.stdout);
+          this.memory = { ws: snap.total.ws, ptys: roots.length };
+          // The Resource Manager opens on this cache instead of measuring again.
+          setShared(RESOURCES_CACHE, { snap, prev: shared(RESOURCES_CACHE)?.snap ?? null });
+          cx.notify();
+        }
       } catch {} finally { this.measuring = false; }
     });
   }
