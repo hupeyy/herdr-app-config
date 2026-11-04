@@ -1,0 +1,11 @@
+{
+  "zoom": 1,
+  "sounds": {
+    "enabled": true
+  },
+  "font": "Cascadia Mono",
+  "font_size": 12,
+  "ui_font": "Ubuntu Mono",
+  "minimum_contrast": 1,
+  "telemetry": false
+}

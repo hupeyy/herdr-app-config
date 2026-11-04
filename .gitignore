@@ -1,0 +1,34 @@
+# Allowlist: this folder is the live herdr-app home. Herdr rewrites its shipped layouts, mods,
+# type files and state on every start, so only what is ours is tracked.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/keys.json
+!/settings.json
+!/claude/
+
+/layouts/*
+!/layouts/
+!/layouts/main-tasks.json
+!/layouts/main-vimnav.json
+
+/mods/*
+!/mods/
+!/mods/agents-space/
+!/mods/file-icons/
+!/mods/file-view/
+!/mods/files-dev/
+!/mods/menu-spaces/
+!/mods/pane-dev/
+!/mods/space-new/
+!/mods/space-panel/
+!/mods/space-tabs/
+!/mods/status-usage/
+!/mods/tabs-tasks/
+!/mods/tasks/
+!/mods/vim-nav/
+
+# Written by herdr into each mod on start.
+gpui-kit.d.ts
+*.error
