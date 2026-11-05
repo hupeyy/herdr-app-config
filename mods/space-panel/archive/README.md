@@ -5,6 +5,7 @@ and in git history so any can come back.
 
 | Look | Where |
 |---|---|
+| Shell spin on the vertical axis: the button rides the band, streaks orbit a tilted ring | commit `6f697be` |
 | Flat front view, 16 px, band straight across (v15) | `pokeball-anim-flat-front.ps1` (commit `bb92025`) |
 | Three-quarter PokeAPI sprite, open ball modelled in 3D (lid turns about the hinge opposite the button) | `pokeball-anim-isometric.ps1` |
 | Three-quarter PokeAPI sprite, half-open lid tipped flat on screen | `pokeball-anim-isometric-tilted-lid.ps1` (commit `f50e862`) |

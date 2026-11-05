@@ -53,17 +53,17 @@ async function ensurePokemonIcons() {
   return makeBallFrames(dir);
 }
 
-// The card's Poké Ball: a flat, front-view pixel ball that pokeball-anim.ps1 draws from maps
-// (no downloaded art). Still when idle; half open when an agent needs input; while a dev workspace
-// works it rocks one way on its base, rocks the other way, then bounces once (squash, stretch, a
-// shadow); while an agent's shell runs it spins with orbit streaks. herdr can only spin an svg,
-// so the script draws the 24x32 frames once and the card swaps them on a timer (see init).
-// Earlier looks (the three-quarter PokeAPI sprite) are kept in ./archive.
+// The card's Poké Ball: the classic 12-pixel sprite that pokeball-anim.ps1 draws from maps (no
+// downloaded art). Still when idle; popping open on repeat when an agent needs input; while a dev
+// workspace works it rocks one way on its base, rocks the other way, then bounces once (squash,
+// stretch, a shadow); while an agent's shell runs it turns flat about its centre with circling
+// streaks. herdr can only spin an svg, so the script draws the frames once and the card swaps
+// them on a timer (see init). Earlier looks are kept in ./archive.
 const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "18"; // 5-15 earlier looks (see ./archive), 16-18 the classic 12-pixel sprite
+const BALL_VERSION = "19"; // 5-15 earlier looks (see ./archive), 16-19 the classic 12-pixel sprite
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
 // While an agent waits: the opening (closed, half open, open), then BALL_OPEN holds, on repeat.
@@ -490,8 +490,8 @@ export default class DevWorkspaces extends View {
     // The space's own mark, like Orca's dot: the Poké Ball open when an agent needs input (a red
     // dot until the art is ready); rocking and hopping while one works (a spinner until then);
     // spinning with a pause while an agent's shell runs (a terminal icon until then); else
-    // standing still (the color tile until then). Frames are 24x32 (ball, room, a shadow), spin
-    // frames 30x32 for their orbit streaks; the slot is 20 wide for all, so titles stay put.
+    // standing still (the color tile until then). Frames are 18x24 (ball, room, a shadow), spin
+    // frames 24x24 for their streaks; the slot is 20 wide for all, so titles stay put.
     const ball = (img) => div().w(20).h(21).flex_none().flex().items_end().justify_center().child(img);
     const working = space.status === "working" && this.pokemonReady;
     const opening = (this.ballTick - (this.openedAt.get(space.id) ?? this.ballTick)) % OPEN_CYCLE;
@@ -500,7 +500,7 @@ export default class DevWorkspaces extends View {
       : space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
       : working ? ball(image(ballFrame(this.ballTick)).w(16).h(21))
       : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
-      : rows.some((r) => r.shell) && this.pokemonReady ? ball(image(spinFrame(this.ballTick)).w(20).h(21))
+      : rows.some((r) => r.shell) && this.pokemonReady ? ball(image(spinFrame(this.ballTick)).w(21).h(21))
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
       : this.pokemonReady ? ball(image(BALL_STILL).w(16).h(21))
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()

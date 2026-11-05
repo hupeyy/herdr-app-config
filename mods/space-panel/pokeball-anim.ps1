@@ -2,11 +2,11 @@
 # from a little above, so the band curves down and the button sits low on the front.
 #   pokeball-v<V>-still.png   idle
 #   pokeball-v<V>-c<n>.png    an agent works: rocks one way, rocks the other way, bounces once
-#   pokeball-v<V>-s<n>.png    an agent's shell runs: spins on its vertical axis, orbit streaks
+#   pokeball-v<V>-s<n>.png    an agent's shell runs: turns flat about its centre, circling streaks
 #   pokeball-v<V>-o<n>.png    an agent starts waiting: closed, half open, open, with a small hop
 #   pokeball-v<V>-open.png    an agent needs input: fully open, the lid's grey inside showing
-# The open ball is 16 rows tall, the closed one 12. Frames are 18x24 (spin frames 23x24) with the ground near the bottom; nearest-neighbour scaling
-# keeps the pixels. Files are named pokeball-v<Version>-...: herdr caches images by path, so a new
+# The open ball is 16 rows tall, the closed one 12. Frames are 18x24 (spin frames 24x24) with
+# the ground near the bottom; nearest-neighbour scaling keeps the pixels. Files are named pokeball-v<Version>-...: herdr caches images by path, so a new
 # look needs new names (space-panel's BALL_VERSION passes the version). Earlier looks: ./archive.
 param([Parameter(Mandatory)][string]$Dir, [string]$Version = '16')
 
@@ -78,27 +78,6 @@ $fullOpen = @(
     '..KKLLLLKK..',
     '....KKKK....'
 )
-# For the spin: the ball without its button (the band straight through), and the button itself.
-$bare = @(
-    '....KKKK....',
-    '..KKRDDDKK..',
-    '.KRRPRDDDDK.',
-    '.KRPWPRRDDK.',
-    'KRRRPRRRDDDK',
-    'KRRRRRRDDDDK',
-    'KKRRRRDDDDKK',
-    'KWKKKKKKKKLK',
-    '.KWWWWWLLLK.',
-    '.KLWWWWLLLK.',
-    '..KKLLLLKK..',
-    '....KKKK....'
-)
-$button = @(
-    '.KK.',
-    'KWWK',
-    'KWWK',
-    '.KK.'
-)
 $ball = Map-Bitmap $closed
 $half = Map-Bitmap $halfOpen
 $open = Map-Bitmap $fullOpen
@@ -142,40 +121,13 @@ function Save-Frame($img, $lift, $sx, $sy, $angle, $path) {
     $out.Dispose()
 }
 
-# ---- Shell: spin on the vertical axis, with circular motion streaks ----
-# A sphere keeps its round outline as it turns, and the ball looks the same all round except for
-# its button, so only the button moves: along the band (which curves down to the front, as the
-# ball is seen from above), narrowing toward the edge, hidden round the back. Spin frames are 23
-# wide so the streaks' ring fits.
+# ---- Shell: the ball turns flat on screen about its centre, like a wheel ----
+# 30-degree steps (nearest-neighbour, so the pixels stay square), with two light streaks circling
+# behind the turn, then a pause. Spin frames are 24x24 so the streaks' circle fits.
 $spin = @(0..11 | ForEach-Object { $_ * 30 }) + @(0, 0, 0, 0, 0, 0)
 $spinTurns = 12 # the first 12 spin frames turn; the rest are the pause, without streaks
-$SW = 23
-$plain = Map-Bitmap $bare
-$patch = Map-Bitmap $button
-$pw = $patch.Width; $ph = $patch.Height
-$r = $bw / 2
-
-# Two light arcs travelling round a tilted ring at the band, the same way as the button. The half
-# behind the ball is dimmer and under it; the half in front is over it, bright, brightening toward
-# the arc's head, with a dark pixel under each so it stands out on the white half.
-function Draw-Orbit($g, $phase, $cx, $cy, $rx, $ry, $back) {
-    $edge = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 20, 22, 30))
-    for ($k = 0; $k -lt 2; $k++) {
-        $t0 = $phase + $k * [Math]::PI
-        for ($j = 0; $j -le 14; $j++) {
-            $t = $t0 + $j * 0.11
-            $front = [Math]::Sin($t) -gt 0
-            if ($front -eq $back) { continue }
-            $a = if ($back) { [Math]::Min(170, 90 + 6 * $j) } else { [Math]::Min(255, 170 + 8 * $j) }
-            $x = [int][Math]::Round($cx + $rx * [Math]::Cos($t)); $y = [int][Math]::Round($cy + $ry * [Math]::Sin($t))
-            if (-not $back) { $g.FillRectangle($edge, $x, $y + 1, 1, 1) }
-            $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int]$a, 225, 245, 255))
-            $g.FillRectangle($b, $x, $y, 1, 1)
-            $b.Dispose()
-        }
-    }
-    $edge.Dispose()
-}
+$SW = 24; $scx = 12; $scy = 15 # the ball's centre in the frame
+$streakR = 8.5
 
 function Save-Spin($angle, $turning, $path) {
     $out = New-Object System.Drawing.Bitmap $SW, $H
@@ -183,31 +135,27 @@ function Save-Spin($angle, $turning, $path) {
     try {
         $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-        $x0 = [int](($SW - $bw) / 2); $top = $ground - $bh
-        $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(100, 0, 0, 0))
-        $g.FillEllipse($shadow, $x0 + 1, $ground - 1, $bw - 2, 3); $shadow.Dispose()
-        # The ring: wider than the ball, tilted, at the band; it turns 1.5 times per ball turn.
-        $ocx = $x0 + $bw / 2 - 0.5; $ocy = $top + 7; $orx = $bw / 2 + 4.5; $ory = 4
-        $phase = -$angle * [Math]::PI / 180 * 1.5
-        if ($turning) { Draw-Orbit $g $phase $ocx $ocy $orx $ory $true }
-        $g.DrawImage($script:plain, $x0, $top, $bw, $bh)
-        $phi = $angle * [Math]::PI / 180
-        $facing = [Math]::Cos($phi)
-        # Visible until it is nearly edge-on; the clip keeps it inside the round outline.
-        if ($facing -gt 0.08) {
-            # Centre on the band: 4.5 px either side of the middle, row 8 at the front, row 7 at the sides.
-            $cx = $script:r + 4.5 * [Math]::Sin($phi); $cy = 7 + $facing
-            # Full width until well round: at 3 px the scaled button loses half its white centre.
-            $w = if ($facing -gt 0.55) { $script:pw } else { [Math]::Max(2, [int][Math]::Round($script:pw * $facing)) }
-            $dx = $x0 + [int][Math]::Round($cx - $w / 2); $dy = $top + [int][Math]::Round($cy - $script:ph / 2)
-            $rim = New-Object System.Drawing.Drawing2D.GraphicsPath
-            $rim.AddEllipse($x0 + 1, $top + 1, $bw - 2, $bh - 2)
-            $g.SetClip($rim)
-            $g.DrawImage($script:patch, (New-Object System.Drawing.Rectangle $dx, $dy, $w, $script:ph),
-                (New-Object System.Drawing.Rectangle 0, 0, $script:pw, $script:ph), [System.Drawing.GraphicsUnit]::Pixel)
-            $g.ResetClip(); $rim.Dispose()
+        $shadow = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(90, 0, 0, 0))
+        $g.FillEllipse($shadow, $scx - 5, $ground - 1, $bw - 1, 3); $shadow.Dispose()
+        if ($turning) {
+            # Two arcs on opposite sides, each brightening toward its head, with a dark pixel
+            # beside each so they stand out on the white half.
+            $edge = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(200, 20, 22, 30))
+            $a0 = $angle * [Math]::PI / 180
+            foreach ($k in 0, 1) {
+                for ($j = 0; $j -le 12; $j++) {
+                    $t = $a0 + $k * [Math]::PI - 0.5 - $j * 0.09
+                    $x = [int][Math]::Round($scx - 0.5 + $streakR * [Math]::Cos($t)); $y = [int][Math]::Round($scy - 0.5 + $streakR * [Math]::Sin($t))
+                    $g.FillRectangle($edge, $x + 1, $y + 1, 1, 1)
+                    $b = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int][Math]::Min(255, 120 + 11 * $j), 225, 245, 255))
+                    $g.FillRectangle($b, $x, $y, 1, 1); $b.Dispose()
+                }
+            }
+            $edge.Dispose()
         }
-        if ($turning) { Draw-Orbit $g $phase $ocx $ocy $orx $ory $false }
+        $g.TranslateTransform([single]$scx, [single]$scy)
+        $g.RotateTransform([single]$angle)
+        $g.DrawImage($script:ball, [single](-$bw / 2), [single](-$bh / 2), [single]$bw, [single]$bh)
     } finally { $g.Dispose() }
     $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $out.Dispose()
