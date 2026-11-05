@@ -90,8 +90,11 @@ animated idle sprites from [PMDCollab/SpriteCollab](https://github.com/PMDCollab
 (Pokémon Mystery Dungeon style pixel art by the SpriteCollab contributors, licensed
 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/); each sprite's artists are listed in
 that repo's `tracker.json` and `credit_names.txt`). 987 Pokémon have one (a few through a form,
-`mods/space-panel/pmd-paths.json`); the rest show a still menu icon from
-[PokeAPI/sprites](https://github.com/PokeAPI/sprites). herdr does not play GIFs reliably, so
+`mods/space-panel/pmd-paths.json`). The other 38 get an idle generated in the same style by
+`mods/space-panel/tools/pmd-style` (Python with Pillow and numpy): it measures how SpriteCollab idles
+relate to the Black/White sprites and animations of Pokémon that have both, then builds one from
+the Pokémon's Showdown sprites (`generate.py make <dex...>`, into `data/`, not this repo). Until
+then they show a still menu icon from [PokeAPI/sprites](https://github.com/PokeAPI/sprites). herdr does not play GIFs reliably, so
 `pmd-frames.ps1` splits each card's sheet into frames once and the cards swap them on one shared
 8 fps clock. Names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
