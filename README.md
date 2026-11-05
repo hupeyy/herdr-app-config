@@ -86,17 +86,17 @@ Each dev workspace card shows a Poké Ball and its own Pokémon, after
 [mathieucroset/herdr-pokemon-agents](https://github.com/mathieucroset/herdr-pokemon-agents) (MIT).
 A new dev workspace gets a random one; the Edit dialog picks another (all 1,025, searchable).
 The art is downloaded on first use into `data/pokemon-icons/` and is not in this repo:
-animated idle sprites from [PMDCollab/SpriteCollab](https://github.com/PMDCollab/SpriteCollab)
-(Pokémon Mystery Dungeon style pixel art by the SpriteCollab contributors, licensed
-[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/); each sprite's artists are listed in
-that repo's `tracker.json` and `credit_names.txt`). 987 Pokémon have one (a few through a form,
-`mods/space-panel/pmd-paths.json`). The other 38 get an idle generated in the same style by
-`mods/space-panel/tools/pmd-style` (Python with Pillow and numpy): it measures how SpriteCollab idles
-relate to the Black/White sprites and animations of Pokémon that have both, then builds one from
-the Pokémon's Showdown sprites (`generate.py make <dex...>`, into `data/`, not this repo). Until
-then they show a still menu icon from [PokeAPI/sprites](https://github.com/PokeAPI/sprites). herdr does not play GIFs reliably, so
-`pmd-frames.ps1` splits each card's sheet into frames once and the cards swap them on one shared
-8 fps clock. Names
+animated sprites made the way [herdr-pokemon-agents](https://github.com/mathieucroset/herdr-pokemon-agents)
+makes them (`mods/space-panel/pokemon-sprites.js`, a port of its `sprites.js`): the idle animation
+from [PMDCollab/SpriteCollab](https://github.com/PMDCollab/SpriteCollab) (Pokémon Mystery Dungeon
+pixel art by the SpriteCollab contributors, [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/);
+each sprite's artists are listed in that repo's `tracker.json` and `credit_names.txt`), facing
+down-right, 2× nearest neighbour, cut into a GIF with [ImageMagick](https://imagemagick.org)
+(`winget install ImageMagick.ImageMagick`). The 51 SpriteCollab lacks take
+[Pokémon Showdown's gen5ani](https://play.pokemonshowdown.com/sprites/gen5ani/) GIF, and the 23 of
+those that gen5ani lacks too a Black/White-style GIF made from the 2D still by
+`mods/space-panel/tools/gen5-style/gen5gen.py` (Python with Pillow and numpy). Until a sprite is
+built, a still menu icon from [PokeAPI/sprites](https://github.com/PokeAPI/sprites) shows. Names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
 Creatures and GAME FREAK. This is an unofficial fan mod.
 
