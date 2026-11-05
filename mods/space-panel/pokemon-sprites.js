@@ -2,9 +2,10 @@
 // sprites (its sprites.js, ported): PMDCollab's SpriteCollab sheet (CC BY-NC 4.0), the Idle
 // animation (or Walk, which it copies when there is no Idle), the row facing down-right, scaled 2x
 // with nearest neighbour (1x for big Pokémon), cut into a looping GIF with ImageMagick. Added
-// here: the GIF is cropped to the box its pixels fill, so it fits the card. SpriteCollab lacks 51
-// (no base Walk sheet): those take Pokémon Showdown's gen5ani GIF, or, for the 23 gen5ani lacks
-// too, a Black/White-style GIF made from the 2D still (tools/gen5-style, in data/.../gen5gen).
+// here: the GIF is cropped to the box its pixels fill, so it fits the card; an Idle without a
+// Walk counts, and 4 Pokémon use a form's sprite (FORMS). SpriteCollab has none for 38: those take
+// Pokémon Showdown's gen5ani GIF, or, for the 18 gen5ani lacks too, a Black/White-style GIF made
+// from the 2D still (tools/gen5-style, in data/.../gen5gen).
 import { exec, appHome, readTextFile, writeTextFile } from "herdr";
 import { nameOf } from "./pokemon-names.js";
 
@@ -14,9 +15,11 @@ const GENERATED_REL = `${ICONS_REL}/gen5gen`;
 const PMD = "https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite";
 const GEN5ANI = "https://play.pokemonshowdown.com/sprites/gen5ani";
 // Bump when the recipe changes, so cached sprites are rebuilt.
-const VERSION = 1;
+const VERSION = 2;
 // PMD sheet rows by facing: 0 down, 1 down-right, ... The card stands it toward its title.
 const IDLE_ROW = 1;
+// Pokémon whose only SpriteCollab sprite is a form's: its folder (shiny groups skipped).
+const FORMS = { 668: "0668/0000/0000/0002", 870: "0870/0002", 999: "0999/0001", 1008: "1008/0001" };
 
 const pad = (id) => String(id).padStart(4, "0");
 const showdownId = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -108,15 +111,16 @@ export async function loadSprite(id) {
     if (meta.version === VERSION) return meta;
   } catch {}
   let meta = null;
-  const base = `${PMD}/${pad(id)}`;
+  const base = `${PMD}/${FORMS[id] ?? pad(id)}`;
   if (await curl([[`${dir}/AnimData.xml`, `${base}/AnimData.xml`]])) {
     const anims = parseAnims(await readTextFile(`${dir}/AnimData.xml`).catch(() => ""));
     const walk = resolve(anims, "Walk");
-    if (walk) {
-      const idle = resolve(anims, "Idle") ?? walk;
+    // Unlike herdr-pokemon-agents, an Idle alone is enough (the card never walks).
+    const idle = resolve(anims, "Idle") ?? walk;
+    if (idle) {
       if (await curl([[`${dir}/${idle.name}.png`, `${base}/${idle.name}-Anim.png`]])) {
         // Big Pokémon (Onix, Gyarados...) have big frames: draw those at 1x.
-        const scale = walk.fh > 64 ? 1 : 2;
+        const scale = (walk ?? idle).fh > 64 ? 1 : 2;
         const size = await cut(`${dir}/${idle.name}.png`, idle, IDLE_ROW, scale, `${dir}/idle.gif`);
         meta = { path: `${rel}/idle.gif`, ...size, source: "SpriteCollab" };
       }

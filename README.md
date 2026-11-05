@@ -92,8 +92,9 @@ from [PMDCollab/SpriteCollab](https://github.com/PMDCollab/SpriteCollab) (Pokém
 pixel art by the SpriteCollab contributors, [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/);
 each sprite's artists are listed in that repo's `tracker.json` and `credit_names.txt`), facing
 down-right, 2× nearest neighbour, cut into a GIF with [ImageMagick](https://imagemagick.org)
-(`winget install ImageMagick.ImageMagick`). The 51 SpriteCollab lacks take
-[Pokémon Showdown's gen5ani](https://play.pokemonshowdown.com/sprites/gen5ani/) GIF, and the 23 of
+(`winget install ImageMagick.ImageMagick`). An Idle without a Walk counts, and 4 Pokémon use a
+form's sprite. The 38 SpriteCollab has no sprite for take
+[Pokémon Showdown's gen5ani](https://play.pokemonshowdown.com/sprites/gen5ani/) GIF, and the 18 of
 those that gen5ani lacks too a Black/White-style GIF made from the 2D still by
 `mods/space-panel/tools/gen5-style/gen5gen.py` (Python with Pillow and numpy). Until a sprite is
 built, a still menu icon from [PokeAPI/sprites](https://github.com/PokeAPI/sprites) shows. Names
