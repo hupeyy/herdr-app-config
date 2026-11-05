@@ -86,7 +86,8 @@ Each dev workspace card shows a Poké Ball and its own Pokémon, after
 [mathieucroset/herdr-pokemon-agents](https://github.com/mathieucroset/herdr-pokemon-agents) (MIT).
 A new dev workspace gets a random one; the Edit dialog picks another (all 1,025, searchable).
 The art is downloaded on first use into `data/pokemon-icons/` and is not in this repo:
-menu icons from [PokeAPI/sprites](https://github.com/PokeAPI/sprites), names
+animated Black/White-style sprites from [Pokémon Showdown](https://play.pokemonshowdown.com/sprites/gen5ani/)
+(866 of them; the rest show a still menu icon from [PokeAPI/sprites](https://github.com/PokeAPI/sprites)), names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
 Creatures and GAME FREAK. This is an unofficial fan mod.
 

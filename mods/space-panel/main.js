@@ -21,6 +21,14 @@ const iconUrl = (id) => (id <= ICON_LAST ? `${SPRITES}/pokemon/versions/generati
 const POKEMON_COUNT = NAMES.length;
 const POKEMON_READY = "ready-3"; // 2 added the Poké Ball, 3 every Pokémon: older downloads are completed once
 const POKEMON_BATCH = 150; // files per curl call, under herdr's 30 s exec limit
+// Animated 2D sprites in the Black/White style, from Pokémon Showdown's gen5ani set (named by
+// Showdown id: "Mr. Mime" -> mrmime). It has most Pokémon; the rest (some of Gen 6-9) keep their
+// still icon. sizes.json (anim-sizes.mjs) lists the ones in, with their size to fit the slot.
+const ANIM_DIR = `${POKEMON_DIR}/gen5ani`;
+const ANIM_READY = "ready-1";
+const showdownId = (name) => name.normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .replace(/♀/g, "f").replace(/♂/g, "m").toLowerCase().replace(/[^a-z0-9]/g, "");
+const animUrl = (id) => `https://play.pokemonshowdown.com/sprites/gen5ani/${showdownId(nameOf(id))}.gif`;
 
 // Saved picks first; a new dev workspace gets a random Pokémon that no other one has.
 function pokemonFor(ids) {
@@ -51,6 +59,27 @@ async function ensurePokemonIcons() {
   }
   await writeTextFile(`${dir}/${POKEMON_READY}`, String(Date.now()), null).catch(() => null);
   return makeBallFrames(dir);
+}
+
+// Downloads the animated sprites once and returns their sizes ({ dex: [w, h] }), or null.
+async function ensurePokemonAnims() {
+  const dir = `${appHome()}/${ANIM_DIR}`;
+  if (!(await readTextFile(`${dir}/${ANIM_READY}`).catch(() => null))) {
+    const files = [];
+    for (let id = 1; id <= POKEMON_COUNT; id++) files.push([`${dir}/${id}.gif`, animUrl(id)]);
+    // curl exits non-zero for the Pokémon gen5ani lacks (404, no file written), so success is
+    // judged by how many came in.
+    for (let i = 0; i < files.length; i += POKEMON_BATCH) {
+      const args = ["-sfL", "-A", "herdr-app", "--retry", "2", "--connect-timeout", "10", "--parallel", "--parallel-max", "16", "--create-dirs"];
+      for (const [file, url] of files.slice(i, i + POKEMON_BATCH)) args.push("-o", file, url);
+      await exec("curl", args).catch(() => null);
+    }
+    const r = await exec("node", [`${appHome()}/mods/space-panel/anim-sizes.mjs`, dir]).catch(() => null);
+    if (r?.code !== 0 || Number(r.stdout) < 800) return null;
+    await writeTextFile(`${dir}/${ANIM_READY}`, String(Date.now()), null).catch(() => null);
+  }
+  const text = await readTextFile(`${dir}/sizes.json`).catch(() => null);
+  try { return text ? JSON.parse(text) : null; } catch { return null; }
 }
 
 // The card's Poké Ball: the classic 12-pixel sprite that pokeball-anim.ps1 draws from maps (no
@@ -257,6 +286,8 @@ export default class DevWorkspaces extends View {
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
     this.pokemonReady = false;
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
+    this.animSizes = null; // still icons until the animated sprites are in
+    cx.spawn(async (cx) => { this.animSizes = await ensurePokemonAnims(); cx.notify(); });
     // Steps the Poké Ball animations; redraws only while some dev workspace is working or has a
     // shell running. One tick serves both cycles (22 and 18 frames).
     this.ballTick = 0;
@@ -570,15 +601,19 @@ export default class DevWorkspaces extends View {
   // The dev workspace's Pokémon beside its title; a click opens the Edit dialog to pick another.
   pokemonButton(space) {
     const n = this.pokemon[space.id];
-    const box = iconBox(n, 20);
-    return div().id(`poke-${space.id}`).w(27).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
+    const size = this.animSizes?.[n];
+    // An animated sprite is fitted into 30x24, keeping its shape; else the still icon.
+    const fit = size ? Math.min(30 / size[0], 24 / size[1]) : 0;
+    const art = size ? image(`${ANIM_DIR}/${n}.gif`).w(Math.round(size[0] * fit)).h(Math.round(size[1] * fit))
+      : (({ w, h }) => image(`${POKEMON_DIR}/${n}.png`).w(w).h(h))(iconBox(n, 20));
+    return div().id(`poke-${space.id}`).w(30).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
       .tooltip(`${nameOf(n)}: click to change`)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
         openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 680, props: { edit: space.id } });
       })
-      .child(image(`${POKEMON_DIR}/${n}.png`).w(box.w).h(box.h));
+      .child(art);
   }
 
   arm(e) {
