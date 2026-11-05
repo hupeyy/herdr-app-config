@@ -86,10 +86,14 @@ Each dev workspace card shows a Poké Ball and its own Pokémon, after
 [mathieucroset/herdr-pokemon-agents](https://github.com/mathieucroset/herdr-pokemon-agents) (MIT).
 A new dev workspace gets a random one; the Edit dialog picks another (all 1,025, searchable).
 The art is downloaded on first use into `data/pokemon-icons/` and is not in this repo:
-animated sprites from [Pokémon Showdown](https://play.pokemonshowdown.com/sprites/ani/), rendered
-from the 3D models (1,011 of them; the rest show a still menu icon from
-[PokeAPI/sprites](https://github.com/PokeAPI/sprites)). herdr does not play GIFs reliably, so
-`gif-frames.ps1` splits each card's GIF into frames once and the card swaps them. Names
+animated idle sprites from [PMDCollab/SpriteCollab](https://github.com/PMDCollab/SpriteCollab)
+(Pokémon Mystery Dungeon style pixel art by the SpriteCollab contributors, licensed
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/); each sprite's artists are listed in
+that repo's `tracker.json` and `credit_names.txt`). 987 Pokémon have one (a few through a form,
+`mods/space-panel/pmd-paths.json`); the rest show a still menu icon from
+[PokeAPI/sprites](https://github.com/PokeAPI/sprites). herdr does not play GIFs reliably, so
+`pmd-frames.ps1` splits each card's sheet into frames once and the cards swap them on one shared
+8 fps clock. Names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
 Creatures and GAME FREAK. This is an unofficial fan mod.
 
