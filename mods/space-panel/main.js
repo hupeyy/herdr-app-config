@@ -21,14 +21,18 @@ const iconUrl = (id) => (id <= ICON_LAST ? `${SPRITES}/pokemon/versions/generati
 const POKEMON_COUNT = NAMES.length;
 const POKEMON_READY = "ready-3"; // 2 added the Poké Ball, 3 every Pokémon: older downloads are completed once
 const POKEMON_BATCH = 150; // files per curl call, under herdr's 30 s exec limit
-// Animated 2D sprites in the Black/White style, from Pokémon Showdown's gen5ani set (named by
-// Showdown id: "Mr. Mime" -> mrmime). It has most Pokémon; the rest (some of Gen 6-9) keep their
-// still icon. sizes.json (anim-sizes.mjs) lists the ones in, with their size to fit the slot.
-const ANIM_DIR = `${POKEMON_DIR}/gen5ani`;
+// Animated sprites rendered from the 3D models, from Pokémon Showdown's ani set (named by Showdown
+// id: "Mr. Mime" -> mrmime). It has all but 14 (late Gen 9), which keep their still icon. The 2D
+// gen5ani set has only 866. sizes.json (anim-sizes.mjs) lists the ones in, with their size.
+const ANIM_DIR = `${POKEMON_DIR}/ani`;
 const ANIM_READY = "ready-1";
 const showdownId = (name) => name.normalize("NFD").replace(/[̀-ͯ]/g, "")
   .replace(/♀/g, "f").replace(/♂/g, "m").toLowerCase().replace(/[^a-z0-9]/g, "");
-const animUrl = (id) => `https://play.pokemonshowdown.com/sprites/gen5ani/${showdownId(nameOf(id))}.gif`;
+// herdr does not reliably play a GIF (it rarely steps past the first frame), so gif-frames.ps1
+// splits each card's GIF into PNG frames once (on demand, only for Pokémon on a card) and the
+// card swaps them on the Poké Ball's timer, picking the frame by the clock and the GIF's delays.
+const FRAMES_DIR = `${POKEMON_DIR}/ani-frames`;
+const animUrl = (id) => `https://play.pokemonshowdown.com/sprites/ani/${showdownId(nameOf(id))}.gif`;
 
 // Saved picks first; a new dev workspace gets a random Pokémon that no other one has.
 function pokemonFor(ids) {
@@ -62,12 +66,19 @@ async function ensurePokemonIcons() {
 }
 
 // Downloads the animated sprites once and returns their sizes ({ dex: [w, h] }), or null.
+// The frame showing at time `now` (ms), looping the GIF's own delays.
+function frameAt(sprite, now) {
+  let t = now % sprite.total;
+  for (let i = 0; i < sprite.delays.length; i++) { t -= sprite.delays[i]; if (t < 0) return i; }
+  return 0;
+}
+
 async function ensurePokemonAnims() {
   const dir = `${appHome()}/${ANIM_DIR}`;
   if (!(await readTextFile(`${dir}/${ANIM_READY}`).catch(() => null))) {
     const files = [];
     for (let id = 1; id <= POKEMON_COUNT; id++) files.push([`${dir}/${id}.gif`, animUrl(id)]);
-    // curl exits non-zero for the Pokémon gen5ani lacks (404, no file written), so success is
+    // curl exits non-zero for the Pokémon the set lacks (404, no file written), so success is
     // judged by how many came in.
     for (let i = 0; i < files.length; i += POKEMON_BATCH) {
       const args = ["-sfL", "-A", "herdr-app", "--retry", "2", "--connect-timeout", "10", "--parallel", "--parallel-max", "16", "--create-dirs"];
@@ -75,7 +86,7 @@ async function ensurePokemonAnims() {
       await exec("curl", args).catch(() => null);
     }
     const r = await exec("node", [`${appHome()}/mods/space-panel/anim-sizes.mjs`, dir]).catch(() => null);
-    if (r?.code !== 0 || Number(r.stdout) < 800) return null;
+    if (r?.code !== 0 || Number(r.stdout) < 1000) return null;
     await writeTextFile(`${dir}/${ANIM_READY}`, String(Date.now()), null).catch(() => null);
   }
   const text = await readTextFile(`${dir}/sizes.json`).catch(() => null);
@@ -288,6 +299,7 @@ export default class DevWorkspaces extends View {
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
     this.animSizes = null; // still icons until the animated sprites are in
     cx.spawn(async (cx) => { this.animSizes = await ensurePokemonAnims(); cx.notify(); });
+    this.sprites = new Map(); // dex -> { w, h, delays, total } once split, "pending" or "none"
     // Steps the Poké Ball animations; redraws only while some dev workspace is working or has a
     // shell running. One tick serves both cycles (22 and 18 frames).
     this.ballTick = 0;
@@ -295,7 +307,7 @@ export default class DevWorkspaces extends View {
     this.openedAt = new Map(); // waiting space id -> the tick its first opening started
     this.anyWaiting = false;
     cx.timer.every(BALL_TICK_MS, (cx) => {
-      if (!(this.anyWorking || this.anyWaiting || this.shells.size) || !this.pokemonReady) return;
+      if (!(this.anyWorking || this.anyWaiting || this.shells.size || this.anyAnimated) || !this.pokemonReady) return;
       this.ballTick += 1; // never wraps, so an opening's frame is ballTick minus its start
       cx.notify();
     });
@@ -598,13 +610,42 @@ export default class DevWorkspaces extends View {
           : [div().px(6).py(4).text_size(12).text_color(t.dim).child("No tabs yet. Add one with +.")]));
   }
 
+  // Splits the GIF of each Pokémon on a card into frames, once (kept on disk), one at a time.
+  splitSprites(cx) {
+    const shown = new Set(Object.values(this.pokemon ?? {}));
+    this.anyAnimated = [...shown].some((n) => typeof this.sprites.get(n) === "object");
+    if (!this.animSizes || this.splitting) return;
+    const n = [...shown].find((d) => this.animSizes[d] && !this.sprites.has(d));
+    if (!n) return;
+    this.splitting = true;
+    this.sprites.set(n, "pending");
+    cx.spawn(async (cx) => {
+      const dir = `${appHome()}/${FRAMES_DIR}/${n}`;
+      let meta = await readTextFile(`${dir}/meta.json`).catch(() => null);
+      if (!meta) {
+        await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `${appHome()}/mods/space-panel/gif-frames.ps1`,
+          "-Gif", `${appHome()}/${ANIM_DIR}/${n}.gif`, "-Out", dir]).catch(() => null);
+        meta = await readTextFile(`${dir}/meta.json`).catch(() => null);
+      }
+      try {
+        const m = JSON.parse(meta);
+        this.sprites.set(n, { ...m, total: m.delays.reduce((a, b) => a + b, 0) });
+      } catch { this.sprites.set(n, "none"); }
+      this.splitting = false;
+      cx.notify();
+    });
+  }
+
   // The dev workspace's Pokémon beside its title; a click opens the Edit dialog to pick another.
   pokemonButton(space) {
     const n = this.pokemon[space.id];
     const size = this.animSizes?.[n];
-    // An animated sprite is fitted into 30x24, keeping its shape; else the still icon.
+    const sprite = this.sprites.get(n);
+    // An animated sprite is fitted into 30x24, keeping its shape; else the still icon. Until its
+    // frames are split, the GIF itself stands in (herdr shows its first frame).
     const fit = size ? Math.min(30 / size[0], 24 / size[1]) : 0;
-    const art = size ? image(`${ANIM_DIR}/${n}.gif`).w(Math.round(size[0] * fit)).h(Math.round(size[1] * fit))
+    const src = typeof sprite === "object" ? `${FRAMES_DIR}/${n}/f${frameAt(sprite, Date.now())}.png` : `${ANIM_DIR}/${n}.gif`;
+    const art = size ? image(src).w(Math.round(size[0] * fit)).h(Math.round(size[1] * fit))
       : (({ w, h }) => image(`${POKEMON_DIR}/${n}.png`).w(w).h(h))(iconBox(n, 20));
     return div().id(`poke-${space.id}`).w(30).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
       .tooltip(`${nameOf(n)}: click to change`)
@@ -780,6 +821,7 @@ export default class DevWorkspaces extends View {
     if (props()?.rowMenu) return this.rowMenu(t);
     if (props()?.moveConfirm) return this.moveConfirm(t);
     this.pokemon = pokemonFor(spaces().map((s) => s.id));
+    this.splitSprites(_cx);
     this.anyWorking = spaces().some((s) => s.status === "working");
     const waiting = new Set(spaces().filter((s) => s.status === "blocked").map((s) => s.id));
     for (const id of waiting) if (!this.openedAt.has(id)) this.openedAt.set(id, this.ballTick);
