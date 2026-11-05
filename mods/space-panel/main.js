@@ -66,8 +66,9 @@ const BALL_FRAMES = 22;
 const BALL_VERSION = "18"; // 5-15 earlier looks (see ./archive), 16-18 the classic 12-pixel sprite
 const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
 const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
-// Played once when an agent starts waiting (closed, half open, open), then BALL_OPEN holds.
+// While an agent waits: the opening (closed, half open, open), then BALL_OPEN holds, on repeat.
 const OPEN_FRAMES = 7;
+const OPEN_CYCLE = 27; // the 7 opening frames plus 20 ticks (1.4 s) held open
 const openFrame = (i) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-o${i}.png`;
 const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
 // An agent with a shell still running: a full turn in 12 frames, then 6 frames of pause.
@@ -260,10 +261,10 @@ export default class DevWorkspaces extends View {
     // shell running. One tick serves both cycles (22 and 18 frames).
     this.ballTick = 0;
     this.anyWorking = false;
-    this.openedAt = new Map(); // waiting space id -> the tick its opening started
-    this.anyOpening = false;
+    this.openedAt = new Map(); // waiting space id -> the tick its first opening started
+    this.anyWaiting = false;
     cx.timer.every(BALL_TICK_MS, (cx) => {
-      if (!(this.anyWorking || this.anyOpening || this.shells.size) || !this.pokemonReady) return;
+      if (!(this.anyWorking || this.anyWaiting || this.shells.size) || !this.pokemonReady) return;
       this.ballTick += 1; // never wraps, so an opening's frame is ballTick minus its start
       cx.notify();
     });
@@ -493,7 +494,7 @@ export default class DevWorkspaces extends View {
     // frames 30x32 for their orbit streaks; the slot is 20 wide for all, so titles stay put.
     const ball = (img) => div().w(20).h(21).flex_none().flex().items_end().justify_center().child(img);
     const working = space.status === "working" && this.pokemonReady;
-    const opening = this.ballTick - (this.openedAt.get(space.id) ?? -OPEN_FRAMES);
+    const opening = (this.ballTick - (this.openedAt.get(space.id) ?? this.ballTick)) % OPEN_CYCLE;
     const mark = space.status === "blocked" && this.pokemonReady
       ? ball(image(opening < OPEN_FRAMES ? openFrame(opening) : BALL_OPEN).w(16).h(21))
       : space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
@@ -748,7 +749,7 @@ export default class DevWorkspaces extends View {
     const waiting = new Set(spaces().filter((s) => s.status === "blocked").map((s) => s.id));
     for (const id of waiting) if (!this.openedAt.has(id)) this.openedAt.set(id, this.ballTick);
     for (const id of this.openedAt.keys()) if (!waiting.has(id)) this.openedAt.delete(id);
-    this.anyOpening = [...this.openedAt.values()].some((t0) => this.ballTick - t0 < OPEN_FRAMES);
+    this.anyWaiting = this.openedAt.size > 0;
 
     const request = shared(MOVE_REQUEST);
     if (request && Number(request.at) > this.lastMove) {
