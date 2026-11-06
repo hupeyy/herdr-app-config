@@ -564,7 +564,10 @@ export default class DevWorkspaces extends View {
       ...work.flatMap((w) => w.prs).map((p) => ctx.prs.find((x) => x.url === p.url) ?? p),
     ], (p) => p.url);
     const prName = (p) => `${(p.repo ?? "").split("/").pop()} #${p.number}`;
-    const title = ticket ? `${ticket.key} ${ticket.summary}` : space.name;
+    // A name given by hand stays the title; a bare ticket key as the name gets its summary.
+    // An unnamed space (called after its folder) is titled by its ticket, when it has one.
+    const bareKey = space.named && TICKET_KEY.exec(space.name)?.[0] === space.name.trim();
+    const title = space.named && !bareKey ? space.name : ticket ? `${ticket.key} ${ticket.summary}` : space.name;
     const folder = mine.find((p) => p.cwd)?.cwd ?? space.folder;
     const fill = fillOf(t, (shared("space.colors") ?? {})[space.id] ?? "ansi6");
     const icon = (shared("space.icons") ?? {})[space.id];

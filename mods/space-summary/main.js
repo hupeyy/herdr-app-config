@@ -29,9 +29,12 @@ function setCollapsed(ids, on) {
 const norm = (p) => String(p ?? "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
 const ROOT_FOLDER = () => norm(`${home()}/Desktop/dev`);
 
-// The sidebar card's title (space-panel card()): the first ticket key in the space name, a tab
-// name, an agent title or the branch, as "KEY summary"; else the space name.
+// The sidebar card's title (space-panel card()): a name given by hand as it is; else the first
+// ticket key in the space name, a tab name, an agent title or the branch, as "KEY summary"; else
+// the space name. A bare ticket key as the name gets its summary too.
 function cardTitle(space, children) {
+  const bareKey = space.named && TICKET_KEY.exec(space.name)?.[0] === space.name.trim();
+  if (space.named && !bareKey) return space.name;
   const texts = [space.name, ...space.tabs.map((x) => x.name), ...children.map((c) => c.title), space.branch];
   const key = texts.map((x) => x?.match(TICKET_KEY)?.[1]?.toUpperCase()).find(Boolean);
   const ticket = key ? shared("tasks.snapshot")?.tickets?.find((x) => x.key === key) : null;
