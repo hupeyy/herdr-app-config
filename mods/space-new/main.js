@@ -26,7 +26,7 @@ const POKE_SHOWN = 240;
 // A dev workspace's Poké Ball. space-panel picks one at random and draws every design's frames;
 // BALL_VERSION and BALLS must match its own.
 const BALL_PICK = "space.balls";
-const BALL_VERSION = "22";
+const BALL_VERSION = "23";
 // #2 is left out: it is the classic ball again.
 const BALLS = ["classic", ...Array.from({ length: 26 }, (_, i) => `d${String(i + 1).padStart(2, "0")}`).filter((d) => d !== "d02")];
 // The closed ball at 3x (pokeball-anim.ps1's pick.png), shown at its own size so it stays sharp:

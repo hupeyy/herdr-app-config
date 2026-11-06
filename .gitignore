@@ -8,6 +8,11 @@
 !/settings.json
 !/claude/
 
+# settings.json mutes Herdr's own sound with it (space-panel plays Pokémon cries instead).
+/sounds/*
+!/sounds/
+!/sounds/silent.mp3
+
 /layouts/*
 !/layouts/
 !/layouts/main-tasks.json
