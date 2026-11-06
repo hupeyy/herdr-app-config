@@ -16,7 +16,7 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 // View, assignees and statuses survive closing the board; the search starts empty each time.
 export function prefs() {
   const p = shared(PREFS) ?? {};
-  return { view: p.view ?? "list", assignees: p.assignees ?? ["me"], columns: p.columns ?? [] };
+  return { view: p.view ?? "list", assignees: p.assignees ?? ["me"], columns: p.columns ?? [], scopes: p.scopes ?? [] };
 }
 function setPrefs(change) {
   setShared(PREFS, { ...prefs(), ...change });
@@ -24,12 +24,16 @@ function setPrefs(change) {
 const toggle = (list, item) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
 
 const columnOf = (columns, ticket) => columns.find((c) => c.statusIds.includes(ticket.statusId))?.name ?? OTHER;
+// A snapshot saved before the backlog was fetched has no scope: it held sprint tickets only.
+const scopeOf = (ticket) => ticket.scope ?? "sprint";
+const SCOPES = [["sprint", "Sprint"], ["backlog", "Backlog"]];
 const initials = (name) => name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 
 function filtered(snap, search) {
-  const { assignees, columns: wanted } = prefs();
+  const { assignees, columns: wanted, scopes } = prefs();
   const q = search.trim().toLowerCase();
   return withMoves(snap?.tickets ?? []).filter((x) =>
+    (!scopes.length || scopes.includes(scopeOf(x))) &&
     (!assignees.length || assignees.some((a) => (a === "me" ? x.mine : x.assignee === a))) &&
     (!wanted.length || wanted.includes(columnOf(snap.columns ?? [], x))) &&
     (!q || x.key.toLowerCase().includes(q) || x.summary.toLowerCase().includes(q) || x.epic?.summary.toLowerCase().includes(q)));
@@ -69,6 +73,11 @@ export function toolbar(view, t, snap) {
         .child(svg("mods/workspace-chrome/search.svg").size(13).text_color(t.dim))
         .child(Input.new(view.search).flex_1().h_full().text_size(12.5).text_color(t.foreground)))
       .child(div().text_size(11).text_color(t.dim).child(snap?.sprint ?? "")))
+    .child(h_flex().gap(4).items_center()
+      .child(div().w(64).flex_none().text_size(11).text_color(t.dim).child("Scope"))
+      .children(SCOPES.map(([id, label]) => chip(t, `sc-${id}`, label, p.scopes.includes(id), () => setPrefs({ scopes: toggle(p.scopes, id) }),
+        countBy((x) => scopeOf(x) === id))))
+      .when(p.scopes.length > 0, (el) => el.child(chip(t, "sc-all", "Both", false, () => setPrefs({ scopes: [] })))))
     .child(h_flex().gap(4).items_center().overflow_x_scrollbar()
       .child(div().w(64).flex_none().text_size(11).text_color(t.dim).child("Assignee"))
       .child(chip(t, "as-me", "Me", p.assignees.includes("me"), () => setPrefs({ assignees: toggle(p.assignees, "me") }), countBy((x) => x.mine)))
@@ -89,6 +98,7 @@ function row(view, t, snap, x, { showEpic }) {
     .cursor_pointer().hover((s) => s.bg(t.hover)).when(picking, (el) => el.bg(t.raised))
     .on_click((_e, cx) => view.openDetail({ kind: "ticket", key: x.key, url: x.url }, cx))
     .child(div().w(96).flex_none().text_color(t.dim).child(x.key))
+    .child(div().w(54).flex_none().text_size(10.5).text_color(t.dim).child(scopeOf(x) === "backlog" ? "Backlog" : ""))
     .child(h_flex().id(`st-${x.key}`).w(130).flex_none().cursor_pointer().tooltip("Change status")
       .on_click((_e, cx) => { cx.stop_propagation(); view.picking = picking ? null : x.key; cx.notify(); })
       .child(pill(t, x)))
@@ -102,7 +112,7 @@ function row(view, t, snap, x, { showEpic }) {
       .child(brand(t, "jira", 12, t.popover)));
   if (!picking) return [line];
   const here = columnOf(snap.columns ?? [], x);
-  const picker = h_flex().pl(112).pr(8).pb(6).pt(2).gap(4).flex_none().flex_wrap()
+  const picker = h_flex().pl(170).pr(8).pb(6).pt(2).gap(4).flex_none().flex_wrap()
     .child(div().text_size(11).text_color(t.dim).mr(4).child("Move to"))
     .children((snap.columns ?? []).filter((c) => c.name !== here).map((c) =>
       chip(t, `mv-${x.key}-${c.name}`, c.name, false, (cx) => { view.picking = null; view.move(x, c, cx); })));
@@ -163,6 +173,7 @@ function boardView(view, t, snap, tickets) {
     .on_click((_e, cx) => view.openDetail({ kind: "ticket", key: x.key, url: x.url }, cx))
     .child(h_flex().gap(6).items_center().text_size(11)
       .child(div().text_color(t.dim).child(x.key))
+      .when(scopeOf(x) === "backlog", (el) => el.child(div().px(5).h(16).rounded(8).items_center().bg(t.raised).text_size(10).text_color(t.muted).child("Backlog")))
       .when(Boolean(x.moving), (el) => el.child(div().text_color(ink(t, "working", t.surface)).frames(SPINNER, 80)))
       .child(div().flex_1())
       .child(div().text_color(x.priority.startsWith("High") ? ink(t, "blocked", t.surface) : t.dim).child(x.priority)))
@@ -194,7 +205,7 @@ function boardView(view, t, snap, tickets) {
 }
 
 export function jiraBody(view, t, snap) {
-  if (!snap?.columns) return div().p(12).text_color(t.dim).child("Loading the sprint…");
+  if (!snap?.columns) return div().p(12).text_color(t.dim).child("Loading Jira…");
   const tickets = filtered(snap, view.search.value());
   if (!tickets.length) return div().p(12).text_color(t.dim).child("No tickets match these filters.");
   const { view: mode } = prefs();
