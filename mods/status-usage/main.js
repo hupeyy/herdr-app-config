@@ -13,6 +13,15 @@ import { spaces, agents, terminals, theme, run, window, keys, home, readTextFile
 const RESOURCES_EVERY_MS = 20000;
 const RESOURCES_CACHE = "resources.snapshot"; // { snap, prev }: the last two measurements
 
+// Auto-summary: when Herdr notifies that an agent finished (status turns "done") or the agent ran
+// /clear, re-summarise that one agent with mods/space-summary/summarize.mjs. Lives here because this chip is always
+// mounted and the summary panel is not. Pending agents wait SETTLE_MS for the turn count to land.
+const SUMMARY_FILE = () => `${home()}/.cache/herdr-app/space-summary.json`;
+const SUMMARIZE = () => `${home()}/.config/herdr-app/mods/space-summary/summarize.mjs`;
+const SETTLE_MS = 3000;
+const RUN_STALE_MS = 3 * 60 * 1000; // as in space-summary: an older "running" mark is from a dead run
+const seen = (x) => ({ status: x.status, session: x.labels?.["claude.session"] ?? null });
+
 const URL = "https://api.anthropic.com/api/oauth/usage";
 const CACHE = "usage.claude";
 const EVERY_MS = 5 * 60 * 1000;
@@ -51,6 +60,47 @@ export default class StatusUsage extends View {
     this.memory = cached ? { ws: cached.total.ws, ptys: Object.keys(cached.roots).length } : null;
     this.measure(cx);
     cx.timer.every(RESOURCES_EVERY_MS, (cx) => this.measure(cx));
+    this.last = new Map(terminals().map((x) => [x.address, seen(x)]));
+    this.pending = new Map(); // address -> { at, newSession }
+    cx.timer.every(1500, (cx) => this.watchAgents(cx));
+  }
+
+  // Edge-triggered, so a restart does not re-summarise every agent that was already done.
+  // A change into "done" is Herdr's "finished" notification; a new claude.session label is /clear or /resume.
+  watchAgents(cx) {
+    const live = terminals().filter((x) => x.state === "live");
+    for (const x of live) {
+      const before = this.last.get(x.address), now = seen(x);
+      if (!before || !now.session) continue;
+      if (before.session && now.session !== before.session) this.pending.set(x.address, { at: Date.now(), newSession: true });
+      else if (now.status === "done" && before.status !== "done") this.pending.set(x.address, { at: Date.now(), newSession: false });
+    }
+    this.last = new Map(live.map((x) => [x.address, seen(x)]));
+    const due = [...this.pending].filter(([, p]) => Date.now() - p.at >= SETTLE_MS).map(([a, p]) => ({ address: a, newSession: p.newSession }));
+    if (due.length && !this.summarizing) this.summarizeAgents(cx, due);
+  }
+
+  summarizeAgents(cx, due) {
+    this.summarizing = true;
+    cx.spawn(async (cx) => {
+      try {
+        const cache = JSON.parse((await readTextFile(SUMMARY_FILE())) || "{}");
+        if (cache.running && Date.now() - cache.running < RUN_STALE_MS) return; // a panel Summarize owns the file; retry next tick
+        const live = terminals().filter((x) => x.state === "live" && x.labels?.["claude.session"]);
+        const info = new Map(agents().map((a) => [a.address, a]));
+        const byAddress = new Map(due.map((d) => [d.address, d]));
+        const stale = live.filter((x) => byAddress.has(x.address)).map((x) => ({
+          id: x.address, session: x.labels["claude.session"], turn: x.turn ?? null, title: x.title || info.get(x.address)?.title || "",
+          space: info.get(x.address)?.space_name ?? "", tab: info.get(x.address)?.tab_name ?? "", newSession: byAddress.get(x.address).newSession,
+        }));
+        for (const d of due) this.pending.delete(d.address);
+        if (!stale.length) return;
+        await exec("node", [SUMMARIZE(), JSON.stringify({ live: live.map((x) => x.address), stale })]);
+        const next = JSON.parse((await readTextFile(SUMMARY_FILE())) || "{}");
+        setShared("space.summary", { at: next.at ?? null, items: next.items ?? {} });
+        cx.notify();
+      } catch {} finally { this.summarizing = false; }
+    });
   }
 
   measure(cx) {
@@ -89,6 +139,20 @@ export default class StatusUsage extends View {
       })
       .child(svg("mods/workspace-chrome/monitor.svg").size(12))
       .child(`${size} · >_ ${m?.ptys ?? "…"}`);
+  }
+
+  // Opens mod "space-summary". The count is live: agents blocked on a prompt, plus agents whose
+  // last summary says they wait on Alex (refreshed per agent when it finishes, or by Summarize).
+  summary(t) {
+    const items = shared("space.summary")?.items ?? {};
+    const needs = terminals().filter((x) => x.state === "live" && (x.status === "blocked"
+      || (items[x.address]?.verdict === "you" && items[x.address]?.session === x.labels?.["claude.session"]))).length;
+    return h_flex().id("summary-chip").h(20).px(7).gap(6).items_center().rounded(5).border_1().border_color(t.border)
+      .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Workspace summary")
+      .on_click(() => openOverlay({ mod: "space-summary", kind: "dialog", width: 0.86, height: 0.8 }))
+      .child(svg("mods/workspace-chrome/layers.svg").size(12))
+      .child("Summary")
+      .when(needs > 0, (el) => el.child(div().text_color(t.blocked).child(`· ${needs} need${needs === 1 ? "s" : ""} you`)));
   }
 
   tick(cx) {
@@ -164,6 +228,7 @@ export default class StatusUsage extends View {
       .child(h_flex().gap(6).items_center().child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
         .when(needs > 0, (el) => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
       .child(div().flex_1())
+      .child(this.summary(t))
       .child(this.resources(t))
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint()));
   }
