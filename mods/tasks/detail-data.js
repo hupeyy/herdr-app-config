@@ -112,6 +112,9 @@ query($owner: String!, $name: String!, $number: Int!) {
       reviewRequests(first: 50) { nodes { requestedReviewer {
         ... on User { login } ... on Team { name slug } ... on Bot { login } ... on Mannequin { login } } } }
       comments(first: 100) { nodes { author { login } body createdAt } }
+      reviewThreads(first: 100) { nodes {
+        isResolved isOutdated path line startLine originalLine originalStartLine diffSide
+        comments(first: 50) { nodes { author { login } body createdAt diffHunk } } } }
       files(first: 100) { nodes { path additions deletions } }
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
         ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
@@ -139,6 +142,7 @@ export async function fetchPr(url) {
     latestReviews: pr.latestReviews.nodes,
     reviewRequests: pr.reviewRequests.nodes.map((n) => n.requestedReviewer).filter(Boolean),
     comments: pr.comments.nodes,
+    threads: pr.reviewThreads.nodes.map((th, i) => ({ ...th, id: `th${i}`, comments: th.comments.nodes })),
     files: pr.files.nodes,
     statusCheckRollup: contexts.map((c) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name ?? "" })),
   };
@@ -174,6 +178,91 @@ export function diffRows(lines) {
     if (kind === " ") return { kind, old: old++, number: next++, text: line.slice(1) || " " };
     return { kind: "", text: line };
   });
+}
+
+// ---- Review threads (comments left on code lines) ----
+
+const SUGGESTION = /```suggestion[^\n]*\n([\s\S]*?)```/;
+
+// A comment's text without its ```suggestion block, and the block's lines (null when it has none).
+export function splitSuggestion(body) {
+  const m = SUGGESTION.exec(body ?? "");
+  if (!m) return { text: body ?? "", suggestion: null };
+  return { text: body.replace(m[0], "").trim(), suggestion: m[1].replace(/\n$/, "").split("\n") };
+}
+
+// The lines a thread comments on, from the end of its diff hunk (the hunk stops at the commented
+// line). Outdated threads count their lines from the original commit.
+export function threadCode(thread) {
+  const last = thread.line ?? thread.originalLine;
+  const first = (thread.line != null ? thread.startLine : thread.originalStartLine) ?? last;
+  const count = last == null ? 1 : Math.max(1, last - first + 1);
+  const hunk = (thread.comments[0]?.diffHunk ?? "").split("\n").filter((l) => !l.startsWith("@@"));
+  const other = thread.diffSide === "LEFT" ? "+" : "-"; // the other side's lines are not the commented code
+  return hunk.filter((l) => l[0] !== other).slice(-count).map((l) => l.slice(1));
+}
+
+// For the Conversation tab: the body with its suggestion shown as a diff against the code it replaces.
+export function suggestionMarkdown(body, thread) {
+  const { text, suggestion } = splitSuggestion(body);
+  if (!suggestion) return text;
+  const diff = [...threadCode(thread).map((l) => `- ${l}`), ...suggestion.map((l) => `+ ${l}`)].join("\n");
+  return `${text}\n\n**Suggested change**\n\`\`\`diff\n${diff}\n\`\`\``.trim();
+}
+
+// Word-wraps plain text to `cols` characters, so a thread drawn in the diff has a known height.
+function wrap(text, cols) {
+  const out = [];
+  for (const para of String(text).replace(/\r/g, "").split("\n")) {
+    let line = "";
+    for (const word of para.split(/(\s+)/)) {
+      if ((line + word).length > cols && line.trim()) { out.push(line.trimEnd()); line = word.trimStart(); }
+      else line += word;
+      while (line.length > cols) { out.push(line.slice(0, cols)); line = line.slice(cols); }
+    }
+    out.push(line.trimEnd());
+  }
+  return out;
+}
+
+// A thread as fixed-height lines for the diff's virtual list: { kind: head|who|text|del|add|code|gap, text }.
+// A resolved thread is one line unless it is opened.
+export function threadLines(thread, open, cols) {
+  const first = thread.comments[0];
+  const where = thread.line ?? thread.originalLine;
+  const tag = [thread.isResolved && "Resolved", thread.isOutdated && "Outdated"].filter(Boolean).join(" · ");
+  const head = `${tag ? `${tag} · ` : ""}${thread.comments.length} comment${thread.comments.length === 1 ? "" : "s"}${where != null ? ` on line ${where}` : ""}`;
+  if (thread.isResolved && !open) {
+    const peek = splitSuggestion(first?.body).text.split("\n")[0] ?? "";
+    return [{ kind: "head", text: `${head} · ${first?.author?.login ?? ""}: ${peek}`.slice(0, cols) }];
+  }
+  const lines = [{ kind: "head", text: head }];
+  if (thread.isOutdated) for (const l of threadCode(thread)) lines.push({ kind: "code", text: l });
+  for (const c of thread.comments) {
+    const { text, suggestion } = splitSuggestion(c.body);
+    lines.push({ kind: "who", text: `${c.author?.login ?? ""} · ${ago(c.createdAt)}` });
+    // Plain text in the diff: bold markers go, code ticks stay (they mark names).
+    if (text) for (const l of wrap(text.replace(/\*\*(.+?)\*\*/g, "$1"), cols)) lines.push({ kind: "text", text: l });
+    if (suggestion) {
+      lines.push({ kind: "text", text: "Suggested change:" });
+      for (const l of threadCode(thread)) lines.push({ kind: "del", text: l });
+      for (const l of suggestion) lines.push({ kind: "add", text: l });
+    }
+    lines.push({ kind: "gap", text: "" });
+  }
+  return lines;
+}
+
+// Where each thread goes in a file's diff rows: after the row of its line on its side, else
+// (outdated, or its line is outside the diff) at the top of the file, key -1.
+export function placeThreads(rows, threads) {
+  const at = new Map();
+  for (const th of threads) {
+    const left = th.diffSide === "LEFT";
+    const i = th.line == null ? -1 : rows.findIndex((r) => (left ? r.old === th.line && r.kind !== "+" : r.number === th.line && r.kind !== "-"));
+    at.set(i, [...(at.get(i) ?? []), th]);
+  }
+  return at;
 }
 
 // ---- Shared helpers ----

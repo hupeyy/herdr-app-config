@@ -4,7 +4,8 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Textarea, TextView, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, run, notify, home, settings, closeOverlay, props, shared, setShared } from "herdr";
 import { withMoves, snapshot } from "./data.js";
-import { fetchIssue, postComment, fetchPr, fetchDiff, diffRows, ago, branchName, agentPrompt } from "./detail-data.js";
+import { fetchIssue, postComment, fetchPr, fetchDiff, diffRows, ago, branchName, agentPrompt,
+  threadCode, suggestionMarkdown, threadLines, placeThreads } from "./detail-data.js";
 import { startSpec } from "./start.js";
 import { ink, onFill } from "./colors.js";
 import { brand, JIRA, GITHUB, brandColor } from "./brand.js";
@@ -203,7 +204,8 @@ export function prPage(view, t, cx, url) {
   const failing = checks.filter((c) => (CHECK[c.state]?.[2] ?? "") === "blocked").length;
   const state = pr.state === "MERGED" ? ["Merged", "accent"] : pr.state === "CLOSED" ? ["Closed", "blocked"] : pr.isDraft ? ["Draft", "muted"] : ["Open", "done"];
   const tab = view.prTab ?? "conversation";
-  const tabs = [["conversation", "Conversation", null], ["checks", "Checks", checks.length], ["files", "Files changed", pr.files.length]];
+  const openCount = openThreads(pr.threads ?? []);
+  const tabs = [["conversation", "Conversation", openCount || null], ["checks", "Checks", checks.length], ["files", "Files changed", pr.files.length]];
 
   const head = v_flex().px(22).pt(14).pb(0).gap(10).flex_none().border_b(1).border_color(t.border)
     .child(h_flex().gap(10).items_center().text_size(12.5)
@@ -290,21 +292,57 @@ function conversationTab(view, t, pr, checks, passing, failing) {
       .when(checks.length > 12, (el) => el.child(div().id("more-checks").text_size(11.5).text_color(t.muted).cursor_pointer()
         .on_click((_e, cx) => { view.prTab = "checks"; cx.notify(); }).child(`All ${checks.length} checks →`))));
 
+  // Comments left on code lines, open ones first; each opens its line in Files changed.
+  const threads = [...(pr.threads ?? [])].sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
+  const threadCard = (th) => v_flex().rounded(8).border_1().border_color(t.border).bg(t.surface).when(th.isResolved, (el) => el.opacity(0.7))
+    .child(h_flex().id(`thl-${th.id}`).px(12).h(34).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
+      .cursor_pointer().hover((s) => s.bg(t.hover)).tooltip("Show it in Files changed")
+      .on_click((_e, cx) => { view.prFile = th.path; view.prTab = "files"; cx.notify(); })
+      .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground)
+        .child(`${th.path}${(th.line ?? th.originalLine) != null ? `:${th.line ?? th.originalLine}` : ""}`))
+      .when(th.isOutdated, (el) => el.child(div().text_color(t.dim).child("Outdated")))
+      .child(div().text_color(ink(t, th.isResolved ? "done" : "working", t.surface)).child(th.isResolved ? "Resolved" : "Open")))
+    .child(v_flex().px(12).py(6).bg(t.background).font_family(settings().font_family ?? "JetBrains Mono").text_size(11.5).text_color(t.muted)
+      .children(threadCode(th).map((l) => div().whitespace_nowrap().truncate().child(l || " "))))
+    .children(th.comments.map((c, i) => v_flex().p(12).gap(6).border_t(1).border_color(t.border)
+      .child(h_flex().gap(8).text_size(12).child(div().font_medium().text_color(t.foreground).child(c.author?.login ?? ""))
+        .child(div().text_color(t.dim).child(ago(c.createdAt))))
+      .child(div().text_size(13).text_color(t.foreground).child(markdown(`pr-${th.id}-${i}`, suggestionMarkdown(c.body, th))))));
+
   return h_flex().id("conv").size_full().min_h(0).p(18).gap(16).items_start().overflow_y_scrollbar()
-    .child(v_flex().flex_1().min_w(0).gap(12).children(events.map(card)))
+    .child(v_flex().flex_1().min_w(0).gap(12).children(events.map(card))
+      .when(threads.length > 0, (el) => el
+        .child(div().pt(6).text_size(12).font_medium().text_color(t.dim)
+          .child(`Review comments ${threads.length}${openThreads(threads) ? ` · ${openThreads(threads)} open` : ""}`))
+        .children(threads.map(threadCard))))
     .child(side);
 }
+
+const openThreads = (threads) => threads.filter((th) => !th.isResolved).length;
+const THREAD_COLS = 100; // a thread in the diff wraps to this many monospace characters (7 px each)
+const THREAD_LINE = 18;
 
 function filesTab(view, t, cx, pr, url) {
   const entry = load(view, cx, `diff:${url}`, () => fetchDiff(url));
   const files = entry.data ?? [];
   const stats = new Map((pr.files ?? []).map((f) => [f.path, f]));
   const open = files.find((f) => f.path === view.prFile) ?? files[0];
-  if (open && view.rowsFor !== `${pr.url}:${open.path}`) {
-    view.rowsFor = `${pr.url}:${open.path}`;
-    view.diffRows = diffRows(open.lines);
-    view.diffWidth = Math.max(600, ...open.lines.map((l) => l.length * 7 + 90));
+  // The diff's items: its rows, each followed by the review threads on its line (threads off the
+  // diff go first). Rebuilt when the file, its threads or an opened resolved thread change.
+  view.openThread ??= new Set();
+  const fileThreads = (pr.threads ?? []).filter((th) => th.path === open?.path);
+  const itemsKey = open && `${pr.url}:${open.path}:${fileThreads.length}:${[...view.openThread].join(",")}`;
+  if (open && view.rowsFor !== itemsKey) {
+    view.rowsFor = itemsKey;
+    const rows = diffRows(open.lines);
+    const at = placeThreads(rows, fileThreads);
+    const thread = (th) => ({ thread: th, lines: threadLines(th, view.openThread.has(th.id), THREAD_COLS) });
+    view.diffRows = [...(at.get(-1) ?? []).map(thread), ...rows.flatMap((r, i) => [r, ...(at.get(i) ?? []).map(thread)])];
+    view.diffSizes = view.diffRows.map((it) => (it.thread ? it.lines.length * THREAD_LINE + 22 : 20));
+    view.diffWidth = Math.max(600, THREAD_COLS * 7 + 150, ...open.lines.map((l) => l.length * 7 + 90));
   }
+  const threadsByFile = new Map();
+  for (const th of pr.threads ?? []) if (!th.isResolved) threadsByFile.set(th.path, (threadsByFile.get(th.path) ?? 0) + 1);
   const list = v_flex().id("pr-files").w(320).flex_none().h_full().min_h(0).p(6).gap(1).overflow_y_scrollbar().border_r(1).border_color(t.border)
     .child(div().px(8).py(6).text_size(11).font_medium().text_color(t.dim).child(`FILES  ${files.length || pr.files.length}`))
     .when(!files.length, (el) => el.child(div().px(8).text_size(12).text_color(entry.error ? ink(t, "blocked", t.popover) : t.dim).child(entry.error ?? "Loading the diff…")))
@@ -318,12 +356,30 @@ function filesTab(view, t, cx, pr, url) {
         .child(v_flex().flex_1().min_w(0)
           .child(div().truncate().text_size(12.5).text_color(t.foreground).child(name))
           .when(parts.length > 0, (el) => el.child(div().truncate().text_size(10.5).text_color(t.dim).child(parts.join("/")))))
+        .when(threadsByFile.has(f.path), (el) => el.child(div().px(5).rounded(8).bg(t.raised).text_size(11)
+          .text_color(ink(t, "working", t.raised)).tooltip("Open review comments").child(String(threadsByFile.get(f.path)))))
         .when(Boolean(s), (el) => el.child(div().text_size(11).text_color(ink(t, "done", t.popover)).child(`+${s.additions}`))
           .child(div().text_size(11).text_color(ink(t, "blocked", t.popover)).child(`−${s.deletions}`)));
     }));
 
   const add = t.ansi2 ?? t.done, del = t.ansi1 ?? t.blocked;
-  const row = ({ kind, old, number, text }) => kind === "@"
+  // A review thread under its line; its height is threadLines' count, so the list's sizes hold.
+  // A resolved thread is one line until clicked.
+  const LINE = {
+    head: (el, th) => el.font_semibold().text_color(th.isResolved ? t.dim : ink(t, "working", t.surface)),
+    who: (el) => el.font_medium().text_color(t.muted), text: (el) => el.text_color(t.foreground),
+    code: (el) => el.text_color(t.dim), gap: (el) => el,
+    del: (el) => el.bg(`${del.slice(0, 7)}33`).text_color(t.foreground), add: (el) => el.bg(`${add.slice(0, 7)}33`).text_color(t.foreground),
+  };
+  const threadItem = ({ thread: th, lines }) => div().h(lines.length * THREAD_LINE + 22).flex_none().pl(100).py(4)
+    .child(v_flex().id(`thd-${th.id}`).w(THREAD_COLS * 7 + 24).h(lines.length * THREAD_LINE + 14).px(12).py(7).rounded(6)
+      .bg(t.surface).border_1().border_color(th.isResolved ? t.border : ink(t, "working", t.surface))
+      .when(th.isResolved, (el) => el.cursor_pointer().tooltip(view.openThread.has(th.id) ? "Collapse" : "Show this resolved thread")
+        .on_click((_e, cx) => { if (view.openThread.has(th.id)) view.openThread.delete(th.id); else view.openThread.add(th.id); cx.notify(); }))
+      .children(lines.map((l) => LINE[l.kind](div().h(THREAD_LINE).flex_none().whitespace_nowrap().overflow_hidden()
+        .child(l.kind === "del" ? `- ${l.text}` : l.kind === "add" ? `+ ${l.text}` : l.text || " "), th))));
+  const row = (item) => (item.thread ? threadItem(item) : diffRow(item));
+  const diffRow = ({ kind, old, number, text }) => kind === "@"
     ? div().w_full().px(12).h(20).flex_none().truncate().bg(t.raised).text_color(t.dim).child(text)
     : h_flex().w_full().h(20).flex_none().gap(8)
       .when(kind === "+", (e) => e.bg(`${add.slice(0, 7)}22`)).when(kind === "-", (e) => e.bg(`${del.slice(0, 7)}22`))
@@ -339,7 +395,7 @@ function filesTab(view, t, cx, pr, url) {
     .child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11.5).text_color(t.foreground)
       .child(div().id("pr-diff-x").size_full().overflow_x_scrollbar()
         .child(div().w_full().min_w(view.diffWidth ?? 600).h_full()
-          .child(v_virtual_list("pr-diff", (view.diffRows ?? []).length, 20, (i) => String(i),
+          .child(v_virtual_list("pr-diff", (view.diffRows ?? []).length, view.diffSizes ?? 20, (i) => String(i),
             (range) => (view.diffRows ?? []).slice(range.start, range.end).map(row)).size_full())))
       .child(Scrollbar.vertical("pr-diff").viewport_from_layout().absolute().inset_0()));
 
