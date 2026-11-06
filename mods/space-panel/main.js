@@ -144,8 +144,9 @@ const WORK_POLL_MS = 20000;
 const uniqueBy = (list, keyOf) => list.filter((x, i) => x && list.findIndex((y) => y && keyOf(y) === keyOf(x)) === i);
 
 // Every target opens as its own tab in the Tasks board; with none, the board opens on a list.
-function openAll(_cx, targets, fallback) {
-  openTask(targets.length ? { targets } : fallback);
+// `workspace` makes the board close tabs left open for other dev workspaces (pinned ones stay).
+function openAll(_cx, targets, fallback, workspace) {
+  openTask(targets.length ? { targets, workspace } : { ...fallback, workspace });
 }
 function setLocked(id, on) {
   const all = { ...(shared(LOCKED) ?? {}) };
@@ -646,10 +647,10 @@ export default class DevWorkspaces extends View {
           .child(space.branch ? `${basename(folder)} · ${space.branch}` : basename(folder)))
         .child(this.iconButton(t, `jira-${space.id}`, JIRA,
           tickets.length ? `Open ${tickets.map((x) => x.key).join(", ")}` : "No ticket here: opens the Jira board",
-          (cx) => openAll(cx, tickets, { tab: "jira" }), tickets.length > 0, JIRA_BLUE, tickets.length))
+          (cx) => openAll(cx, tickets, { tab: "jira" }, space.id), tickets.length > 0, JIRA_BLUE, tickets.length))
         .child(this.iconButton(t, `gh-${space.id}`, GITHUB,
           prs.length ? `Open ${prs.map(prName).join(", ")}` : "No PR here: opens My PRs",
-          (cx) => openAll(cx, prs.map((p) => ({ kind: "pr", url: p.url })), { tab: "mine" }), prs.length > 0, null, prs.length)))
+          (cx) => openAll(cx, prs.map((p) => ({ kind: "pr", url: p.url })), { tab: "mine" }, space.id), prs.length > 0, null, prs.length)))
       .when(!open, (el) => el.when(Boolean(latest), (el) => el.child(this.row(t, { ...latest, depth: 0 }))))
       .when(open, (el) => el
         .child(h_flex().px(4).pt(3).gap(4).items_center()

@@ -135,10 +135,19 @@ export default class Tasks extends View {
 
   // A request opens a ticket or PR ({ kind, ... }), several at once ({ targets: [...] }, from a
   // dev workspace's Jira or GitHub button), or one of the board's lists ({ tab }).
+  // A request from a dev workspace's button carries `workspace`: the tabs left open for other
+  // workspaces close first (pinned ones stay), so the strip shows that workspace's tickets and PRs.
   takeRequest(target) {
-    if (target?.targets) this.openTabs(target.targets);
+    if (target?.workspace) this.keepWorkspace(target.workspace);
+    if (target?.targets) this.openTabs(target.targets.map((x) => ({ ...x, workspace: target.workspace })));
     else if (target?.tab) { this.tab = target.tab; this.detail = null; }
     else if (target?.kind) this.openTabs([target]);
+  }
+
+  keepWorkspace(workspace) {
+    this.open = this.open.filter((o) => o.pinned || o.workspace === workspace);
+    setShared(OPEN, this.open);
+    if (this.detail && !this.open.some((o) => tabId(o) === tabId(this.detail))) this.show(null);
   }
 
   // Adds each target as a tab (an open one is reused) and shows the first.
@@ -148,6 +157,14 @@ export default class Tasks extends View {
     for (const x of list) if (!this.open.some((o) => tabId(o) === tabId(x))) this.open.push(x);
     setShared(OPEN, this.open);
     this.show(this.open.find((o) => tabId(o) === tabId(list[0])));
+  }
+
+  // A pinned tab stays through workspace switches and Close all; pinned tabs sit first.
+  togglePin(target, cx) {
+    this.open = this.open.map((o) => (tabId(o) === tabId(target) ? { ...o, pinned: !o.pinned } : o));
+    this.open = [...this.open.filter((o) => o.pinned), ...this.open.filter((o) => !o.pinned)];
+    setShared(OPEN, this.open);
+    cx.notify();
   }
 
   show(target) {
@@ -175,12 +192,18 @@ export default class Tasks extends View {
     const tip = (x) => (x.kind === "ticket"
       ? `${x.key} ${snap?.tickets?.find((k) => k.key === x.key)?.summary ?? ""}`
       : [...(snap?.mine ?? []), ...(snap?.review ?? [])].find((p) => p.url === x.url)?.title ?? x.url);
-    const tab = (id, active, children, onClick, onClose) => h_flex().id(id).h(28).pl(10).pr(onClose ? 4 : 10).gap(6).flex_none()
-      .items_center().rounded(7).cursor_pointer().max_w(220)
+    const tab = (id, active, children, onClick, onClose, pin) => h_flex().id(id).h(28).pl(10).pr(onClose || pin ? 4 : 10).gap(6).flex_none()
+      .items_center().rounded(7).cursor_pointer().max_w(240)
       .bg(active ? t.selected : t.popover).text_color(active ? t.foreground : t.muted).hover((s) => s.bg(active ? t.selected : t.hover))
       .on_click((_e, cx) => { onClick(); cx.notify(); })
       .children(children)
-      .when(Boolean(onClose), (el) => el.child(div().id(`${id}-x`).p(2).rounded(4).text_color(t.dim)
+      // Pin: dim until pinned; a pinned tab has no close button (unpin it first).
+      .when(Boolean(pin), (el) => el.child(div().id(`${id}-pin`).p(2).rounded(4).tooltip(pin.on ? "Unpin" : "Pin: keep this tab open")
+        .text_color(pin.on ? t.accent : t.dim).opacity(pin.on ? 1 : 0.6)
+        .hover((s) => s.bg(t.raised).text_color(t.foreground).opacity(1))
+        .on_click((_e, cx) => { cx.stop_propagation(); pin.toggle(cx); })
+        .child(svg(ICON("pin")).size(11))))
+      .when(Boolean(onClose) && !pin?.on, (el) => el.child(div().id(`${id}-x`).p(2).rounded(4).text_color(t.dim)
         .hover((s) => s.bg(t.raised).text_color(t.foreground))
         .on_click((_e, cx) => { cx.stop_propagation(); onClose(cx); })
         .child(svg(ICON("x")).size(11))));
@@ -188,11 +211,16 @@ export default class Tasks extends View {
       .child(tab("open-board", !this.detail, [svg(ICON("layers")).size(13), div().child("Board")], () => this.show(null)))
       .children(this.open.map((x) => tab(`open-${tabId(x)}`, Boolean(this.detail) && tabId(this.detail) === tabId(x),
         [brand(t, x.kind === "ticket" ? "jira" : "github", 13, t.popover), div().truncate().tooltip(tip(x)).child(label(x))],
-        () => this.show(x), (cx) => this.closeTab(x, cx))))
-      .when(this.open.length > 1, (el) => el.child(div().flex_1()).child(div().id("close-all-tabs").px(8).h(26).flex_none()
-        .flex().items_center().rounded(6).text_size(11.5).text_color(t.dim).cursor_pointer()
+        () => this.show(x), (cx) => this.closeTab(x, cx), { on: Boolean(x.pinned), toggle: (cx) => this.togglePin(x, cx) })))
+      .when(this.open.filter((o) => !o.pinned).length > 1, (el) => el.child(div().flex_1()).child(div().id("close-all-tabs").px(8).h(26).flex_none()
+        .flex().items_center().rounded(6).text_size(11.5).text_color(t.dim).cursor_pointer().tooltip("Close every tab that is not pinned")
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .on_click((_e, cx) => { this.open = []; setShared(OPEN, []); this.show(null); cx.notify(); })
+        .on_click((_e, cx) => {
+          this.open = this.open.filter((o) => o.pinned);
+          setShared(OPEN, this.open);
+          if (this.detail && !this.open.some((o) => tabId(o) === tabId(this.detail))) this.show(null);
+          cx.notify();
+        })
         .child("Close all")));
   }
 
