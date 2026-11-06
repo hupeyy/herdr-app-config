@@ -4,11 +4,11 @@
 // The root grouping comes from space-tabs (shared "roots" / "space.root").
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, agents, terminals, panes, run, theme, shared, setShared, setAgentOrder, knownAgents, props, openOverlay, closeOverlay, exec, home, appHome, readTextFile, writeTextFile } from "herdr";
+import { v_flex, h_flex, InputState, Input, HoverCard } from "gpui-base";
+import { spaces, agents, terminals, panes, run, theme, shared, setShared, setAgentOrder, knownAgents, props, openOverlay, closeOverlay, exec, home, appHome, readTextFile, writeTextFile, playSound } from "herdr";
 import { fileIcon, isLight } from "./file-icons/icons.js";
 import { NAMES, nameOf, ICON_LAST, iconBox } from "./pokemon-names.js";
-import { loadSprite } from "./pokemon-sprites.js";
+import { loadSprite, VERSION as SPRITE_VERSION } from "./pokemon-sprites.js";
 
 // ---- A Pokémon per dev workspace, after mathieucroset/herdr-pokemon-agents (MIT) ----
 // Its menu icons (PokeAPI, gen VII, 40x30) are downloaded on first use into the herdr-app home;
@@ -21,6 +21,12 @@ const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprite
 const iconUrl = (id) => (id <= ICON_LAST ? `${SPRITES}/pokemon/versions/generation-vii/icons/${id}.png` : `${SPRITES}/pokemon/${id}.png`);
 const POKEMON_COUNT = NAMES.length;
 const POKEMON_READY = "ready-3"; // 2 added the Poké Ball, 3 every Pokémon: older downloads are completed once
+const SPACE_ART = "space.art"; // see publishArt
+const CARD_ART = 96; // the hover card's sprite box (pokemonButton)
+// A card's status from its rows: anything working keeps the dev workspace in progress.
+const STATUS_RANK = { blocked: 0, working: 1, done: 2, idle: 3 };
+const rollupStatus = (statuses) => statuses.filter((s) => s in STATUS_RANK).sort((a, b) => STATUS_RANK[a] - STATUS_RANK[b])[0] ?? null;
+const FALLBACK_SOUND = "sounds/windows-notify.mp3"; // for a Pokémon with no cry (watchCries)
 const POKEMON_BATCH = 150; // files per curl call, under herdr's 30 s exec limit
 
 // Saved picks first; a new dev workspace gets a random Pokémon that no other one has.
@@ -41,7 +47,7 @@ function pokemonFor(ids) {
 
 async function ensurePokemonIcons() {
   const dir = `${appHome()}/${POKEMON_DIR}`;
-  if (await readTextFile(`${dir}/${POKEMON_READY}`).catch(() => null)) return makeBallFrames(dir);
+  if (await readTextFile(`${dir}/${POKEMON_READY}`).catch(() => null)) return true;
   const files = [];
   for (let id = 1; id <= POKEMON_COUNT; id++) files.push([`${dir}/${id}.png`, iconUrl(id)]);
   for (let i = 0; i < files.length; i += POKEMON_BATCH) {
@@ -51,11 +57,11 @@ async function ensurePokemonIcons() {
     if (r?.code !== 0) return false;
   }
   await writeTextFile(`${dir}/${POKEMON_READY}`, String(Date.now()), null).catch(() => null);
-  return makeBallFrames(dir);
+  return true;
 }
 
 
-
+// The card's Poké Ball: a pixel sprite that pokeball-anim.ps1 draws from maps (no
 // The card's Poké Ball: the classic 12-pixel sprite that pokeball-anim.ps1 draws from maps (no
 // downloaded art). Still when idle; popping open on repeat when an agent needs input; while a dev
 // workspace works it rocks one way on its base, rocks the other way, then bounces once (squash,
@@ -66,23 +72,55 @@ const BALL_TICK_MS = 70;
 const BALL_FRAMES = 22;
 // herdr caches images by path, so the version is in every frame's name: bump it whenever the
 // motion or the ball changes, or the cards keep showing the old frames.
-const BALL_VERSION = "19"; // 5-15 earlier looks (see ./archive), 16-19 the classic 12-pixel sprite
-const BALL_STILL = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-still.png`;
-const BALL_OPEN = `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-open.png`;
-// While an agent waits: the opening (closed, half open, open), then BALL_OPEN holds, on repeat.
+const BALL_VERSION = "23"; // 5-15 earlier looks (see ./archive), 16-19 the classic sprite, 20-23 one per space
+// Each dev workspace has its own ball, like its Pokémon: the classic one or a design from
+// pokeball-designs.json (space-new's Edit dialog picks it). Frame names carry the design.
+// #2 is left out: it is the classic ball again.
+const BALLS = ["classic", ...Array.from({ length: 26 }, (_, i) => `d${String(i + 1).padStart(2, "0")}`).filter((d) => d !== "d02")];
+const BALL_PICK = "space.balls";
+const ballName = (d, frame) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-${d}-${frame}.png`;
+// While an agent waits: the opening (closed, half open, open), then the open frame holds, on repeat.
 const OPEN_FRAMES = 7;
 const OPEN_CYCLE = 27; // the 7 opening frames plus 20 ticks (1.4 s) held open
-const openFrame = (i) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-o${i}.png`;
-const ballFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-c${tick % BALL_FRAMES}.png`;
+// Cells of the design's sheet (pokeball-anim.ps1): still, the working frames, spin, opening, open.
+const STILL_CELL = 0;
+const openCell = (i) => 1 + BALL_FRAMES + SPIN_CELLS + i;
+const OPEN_CELL = 1 + BALL_FRAMES + 18 + 7;
+const ballCell = (tick) => 1 + (tick % BALL_FRAMES);
 // An agent with a shell still running: a full turn in 12 frames, then 6 frames of pause.
 const SPIN_FRAMES = 18;
-const spinFrame = (tick) => `${POKEMON_DIR}/pokeball-v${BALL_VERSION}-s${tick % SPIN_FRAMES}.png`;
+const SPIN_CELLS = 18;
+const spinCell = (tick) => 1 + BALL_FRAMES + (tick % SPIN_FRAMES);
+const SHEET_CELLS = OPEN_CELL + 1;
+// One 24x24 cell of the sheet: the sheet sits behind a clipping box, moved left. Swapping one
+// file per frame made the ball flash (herdr loads an image when first shown, and drops unshown ones).
+const ballCellImage = (d, cell) => div().w(24).h(24).flex_none().relative().overflow_hidden()
+  .child(image(ballName(d, "sheet")).absolute().top(0).left(-24 * cell).w(24 * SHEET_CELLS).h(24));
 
-async function makeBallFrames(dir) {
-  if (await readTextFile(`${dir}/pokeball-v${BALL_VERSION}-ready`).catch(() => null)) return true;
-  await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    `${appHome()}/mods/space-panel/pokeball-anim.ps1`, "-Dir", dir, "-Version", BALL_VERSION]).catch(() => null);
-  return true;
+// Draws one design's frames once (about a second); true when they are there.
+async function makeBallFrames(d) {
+  const dir = `${appHome()}/${POKEMON_DIR}`;
+  const ready = `${dir}/pokeball-v${BALL_VERSION}-${d}-ready`;
+  if (await readTextFile(ready).catch(() => null)) return true;
+  await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `${appHome()}/mods/space-panel/pokeball-anim.ps1`,
+    "-Dir", dir, "-Version", `${BALL_VERSION}-${d}`, ...(d === "classic" ? [] : ["-Design", d])]).catch(() => null);
+  return Boolean(await readTextFile(ready).catch(() => null));
+}
+
+// Saved picks first; a new dev workspace gets a random ball, one no other has while any is free.
+function ballsFor(ids) {
+  const saved = shared(BALL_PICK) ?? {};
+  const fresh = {};
+  const used = new Set(Object.values(saved));
+  for (const id of ids) {
+    if (BALLS.includes(saved[id])) continue;
+    const free = BALLS.filter((d) => !used.has(d));
+    const pool = free.length ? free : BALLS;
+    fresh[id] = pool[Math.floor(Math.random() * pool.length)];
+    used.add(fresh[id]);
+  }
+  if (Object.keys(fresh).length) setShared(BALL_PICK, { ...saved, ...fresh });
+  return { ...saved, ...fresh };
 }
 
 // The Jira and GitHub marks (Simple Icons, CC0), as in the Tasks board (mods/tasks/brand.js).
@@ -260,6 +298,7 @@ export default class DevWorkspaces extends View {
     cx.timer.every(SHELL_POLL_MS, (cx) => this.pollShells(cx));
     this.pokemonReady = false;
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
+    this.ballsReady = new Set(); // designs whose frames are drawn
     this.sprites = new Map(); // dex -> pokemon-sprites.js's { path, w, h, source }, "pending" or null
     // Steps the Poké Ball animations; redraws only while some dev workspace is working or has a
     // shell running. One tick serves both cycles (22 and 18 frames).
@@ -268,7 +307,7 @@ export default class DevWorkspaces extends View {
     this.openedAt = new Map(); // waiting space id -> the tick its first opening started
     this.anyWaiting = false;
     cx.timer.every(BALL_TICK_MS, (cx) => {
-      if (!(this.anyWorking || this.anyWaiting || this.shells.size) || !this.pokemonReady) return;
+      if (!(this.anyWorking || this.anyWaiting || this.shells.size) || !this.ballsReady.size) return;
       this.ballTick += 1; // never wraps, so an opening's frame is ballTick minus its start
       cx.notify();
     });
@@ -277,6 +316,40 @@ export default class DevWorkspaces extends View {
     this.subagents = new Map(); // claude session id -> its subagents (scan-agents.mjs)
     cx.timer.every(AGENT_POLL_MS, (cx) => this.pollAgents(cx));
     this.pollAgents(cx);
+    this.cries = new Map(); // dex -> its cry's path (cries.mjs), or null when it has none
+    this.spaceStatus = new Map(); // space id -> the card's rolled-up status (rollupStatus)
+    this.agentStatus = new Map(agents().map((a) => [a.address, a.status]));
+    cx.timer.every(1000, () => this.watchCries());
+  }
+
+  // The space's Pokémon cries when one of its agents finishes unseen ("done") or needs you
+  // ("blocked"), the moments Herdr notifies. settings.json points Herdr's own sounds at
+  // sounds/silent.mp3, so only the cry plays; a Pokémon without one plays the old sound.
+  // Only the sidebar copy plays: the menu popups are copies of this mod too.
+  watchCries() {
+    const p = props() ?? {};
+    if (p.addMenu || p.newMenu || p.rowMenu || p.moveConfirm) return;
+    const now = agents();
+    const space = now.find((a) => {
+      const before = this.agentStatus.get(a.address);
+      return before !== undefined && before !== a.status && (a.status === "done" || a.status === "blocked");
+    })?.space;
+    this.agentStatus = new Map(now.map((a) => [a.address, a.status]));
+    if (!space) return;
+    playSound(this.cries.get(this.pokemon?.[space]) ?? FALLBACK_SOUND); // one cry per tick
+  }
+
+  // Fetches the cries of the Pokémon on cards (cries.mjs), a batch at a time.
+  loadCries(cx) {
+    const missing = [...new Set(Object.values(this.pokemon ?? {}))].filter((d) => !this.cries.has(d));
+    if (this.loadingCries || !missing.length) return;
+    this.loadingCries = true;
+    cx.spawn(async () => {
+      try {
+        const res = await exec("node", [`${home()}/.config/herdr-app/mods/space-panel/cries.mjs`, ...missing.map(String)]);
+        for (const [d, path] of Object.entries(JSON.parse(res.stdout || "{}"))) this.cries.set(Number(d), path);
+      } catch {} finally { this.loadingCries = false; }
+    });
   }
 
   // Only agents that are not working can be hiding a running shell, so skip the scan when none is.
@@ -334,17 +407,17 @@ export default class DevWorkspaces extends View {
   }
 
   // Each live Claude session's tickets and PRs (scan-work.mjs reads its transcript), filed under
-  // the dev workspace its pane is in. A session that ended (or was cleared) keeps its finds there,
-  // in shared "space.work", until that dev workspace closes.
+  // the dev workspace its pane is in, in shared "space.work". A session that exited keeps its finds
+  // there until that dev workspace closes; a /clear (a new session in the same terminal) drops them.
   pollWork(cx) {
     if (this.scanning) return;
     const tabSpace = new Map(spaces().flatMap((s) => s.tabs.map((tab) => [tab.id, s.id])));
     const paneOf = new Map(panes().filter((p) => p.terminal).map((p) => [p.terminal, p]));
-    const live = new Map();
+    const live = new Map(); // session -> { space, terminal }
     for (const x of terminals()) {
       const sid = x.labels?.["claude.session"];
       const space = tabSpace.get(paneOf.get(x.address)?.tab);
-      if (sid && space) live.set(sid, space);
+      if (sid && space) live.set(sid, { space, terminal: x.address });
     }
     if (!live.size) return;
     this.scanning = true;
@@ -353,9 +426,13 @@ export default class DevWorkspaces extends View {
         const res = await exec("node", [`${home()}/.config/herdr-app/mods/space-panel/scan-work.mjs`, ...live.keys()]);
         const found = JSON.parse(res.stdout || "{}");
         const known = new Set(spaces().map((s) => s.id));
-        const sessions = Object.fromEntries(Object.entries(shared(WORK)?.sessions ?? {}).filter(([, w]) => known.has(w.space)));
-        for (const [sid, space] of live) {
-          sessions[sid] = { space, tickets: found[sid]?.tickets ?? [], prs: found[sid]?.prs ?? [], worktrees: found[sid]?.worktrees ?? [] };
+        const liveTerminals = new Set([...live.values()].map((l) => l.terminal));
+        // Kept: sessions still live, and exited ones whose terminal now runs no other session.
+        // Entries saved before `terminal` was recorded are from sessions no longer live, so they go.
+        const sessions = Object.fromEntries(Object.entries(shared(WORK)?.sessions ?? {}).filter(([sid, w]) =>
+          known.has(w.space) && (live.has(sid) || (w.terminal && !liveTerminals.has(w.terminal)))));
+        for (const [sid, { space, terminal }] of live) {
+          sessions[sid] = { space, terminal, tickets: found[sid]?.tickets ?? [], prs: found[sid]?.prs ?? [], worktrees: found[sid]?.worktrees ?? [] };
         }
         const next = { sessions };
         if (JSON.stringify(next) !== JSON.stringify(shared(WORK) ?? {})) { setShared(WORK, next); cx.notify(); }
@@ -495,21 +572,31 @@ export default class DevWorkspaces extends View {
     // dot until the art is ready); rocking and hopping while one works (a spinner until then);
     // spinning with a pause while an agent's shell runs (a terminal icon until then); else
     // standing still (the color tile until then). Frames are 18x24 (ball, room, a shadow), spin
-    // frames 24x24 for their streaks; the slot is 20 wide for all, so titles stay put.
-    const ball = (img) => div().w(20).h(21).flex_none().flex().items_end().justify_center().child(img);
-    const working = space.status === "working" && this.pokemonReady;
+    // frames 24x24 for their streaks; all sit in 24x24 cells of one sheet. The slot is 20 wide (a
+    // spin's streaks overhang it), so titles stay put.
+    // Frames show at their own size: scaled, nearest-neighbour pixels blur.
+    const ball = (cell) => div().w(20).h(24).flex_none().flex().items_end().justify_center().child(ballCellImage(d, cell));
+    const d = this.balls?.[space.id] ?? "classic";
+    const drawn = this.ballsReady.has(d);
+    // Herdr's space.status ranks done above working, so one finished sub-agent would stop the ball
+    // while its parent still works: the card ranks its own rows, working above done.
+    const status = rollupStatus(rows.map((r) => r.status)) ?? space.status;
+    this.spaceStatus.set(space.id, status);
+    const working = status === "working" && drawn;
     const opening = (this.ballTick - (this.openedAt.get(space.id) ?? this.ballTick)) % OPEN_CYCLE;
-    const mark = space.status === "blocked" && this.pokemonReady
-      ? ball(image(opening < OPEN_FRAMES ? openFrame(opening) : BALL_OPEN).w(16).h(21))
-      : space.status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
-      : working ? ball(image(ballFrame(this.ballTick)).w(16).h(21))
-      : space.status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
-      : rows.some((r) => r.shell) && this.pokemonReady ? ball(image(spinFrame(this.ballTick)).w(21).h(21))
+    const mark = status === "blocked" && drawn
+      ? ball(opening < OPEN_FRAMES ? openCell(opening) : OPEN_CELL)
+      : status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
+      : working ? ball(ballCell(this.ballTick))
+      : status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
+      : rows.some((r) => r.shell) && drawn ? ball(spinCell(this.ballTick))
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
-      : this.pokemonReady ? ball(image(BALL_STILL).w(16).h(21))
+      : drawn ? ball(STILL_CELL)
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
         .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color("#ffffff")));
-    const latest = rows.filter((r) => r.status).sort((a, b) => (b.at ?? 0) - (a.at ?? 0))[0];
+    // Collapsed, the card shows its most urgent agent (newest first among equals).
+    const latest = rows.filter((r) => r.status)
+      .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || (b.at ?? 0) - (a.at ?? 0))[0];
     const menuHeight = 44 + 30 * (this.agentChoices.length + (space.active ? 3 : 2));
     const dropping = this.moved && Boolean(this.drag) && this.dropTarget === space.id && this.drag.space !== space.id;
 
@@ -571,10 +658,31 @@ export default class DevWorkspaces extends View {
           : [div().px(6).py(4).text_size(12).text_color(t.dim).child("No tabs yet. Add one with +.")]));
   }
 
+  // Each card's art for other mods (space-summary), as shared "space.art" { spaceId: { pokemon, ball } }:
+  // pokemon { path, w, h } (the GIF, else the still icon), ball the sheet's path and its 24 px cell
+  // count (still is cell 0), or null until drawn. Written only on change: setShared re-renders every mod.
+  publishArt() {
+    if (!this.pokemonReady) return;
+    const art = {};
+    for (const s of spaces()) {
+      const n = this.pokemon?.[s.id];
+      const sprite = this.sprites.get(n);
+      const d = this.balls?.[s.id] ?? "classic";
+      art[s.id] = {
+        pokemon: !n ? null : sprite?.path ? { path: sprite.path, w: sprite.w, h: sprite.h, name: nameOf(n) }
+          : { ...iconBox(n, 20), path: `${POKEMON_DIR}/${n}.png`, name: nameOf(n) },
+        ball: this.ballsReady.has(d) ? { sheet: ballName(d, "sheet"), cells: SHEET_CELLS } : null,
+      };
+    }
+    if (JSON.stringify(art) !== JSON.stringify(shared(SPACE_ART) ?? {})) setShared(SPACE_ART, art);
+  }
+
   // Builds the animated sprite of each Pokémon on a card (pokemon-sprites.js), once, one at a time.
   loadSprites(cx) {
     if (this.loadingSprite) return;
-    const n = [...new Set(Object.values(this.pokemon ?? {}))].find((d) => !this.sprites.has(d));
+    // Sprites from an older recipe (pokemon-sprites.js's VERSION) are rebuilt too.
+    const stale = (s) => s === undefined || (s?.version && s.version !== SPRITE_VERSION);
+    const n = [...new Set(Object.values(this.pokemon ?? {}))].find((d) => stale(this.sprites.get(d)));
     if (!n) return;
     this.loadingSprite = true;
     this.sprites.set(n, "pending");
@@ -585,26 +693,59 @@ export default class DevWorkspaces extends View {
     });
   }
 
-  // The dev workspace's Pokémon beside its title; a click opens the Edit dialog to pick another.
-  pokemonButton(space) {
-    const n = this.pokemon[space.id];
+  // Draws the balls' frames one design at a time: those on cards first, then the rest, whose
+  // still frames the Edit dialog shows.
+  loadBalls(cx) {
+    if (this.loadingBall) return;
+    const inUse = new Set(Object.values(this.balls ?? {}));
+    const d = [...BALLS.filter((x) => inUse.has(x)), ...BALLS].find((x) => !this.ballsReady.has(x) && !this.ballFailed?.has(x));
+    if (!d) return;
+    this.loadingBall = true;
+    cx.spawn(async (cx) => {
+      if (await makeBallFrames(d)) this.ballsReady.add(d);
+      else (this.ballFailed ??= new Set()).add(d);
+      this.loadingBall = false;
+      cx.notify();
+    });
+  }
+
+  // The animated GIF, fitted into w x h keeping its shape; else (and until it is built) the still
+  // icon. image() steps a GIF only when the window redraws, so beside it a speck pulses natively
+  // (no script runs for it) and keeps the window redrawing.
+  pokemonArt(n, w, h) {
     const sprite = this.sprites.get(n);
-    // The animated GIF, fitted into 30x24 keeping its shape; else (and until it is built) the still
-    // icon. image() steps a GIF only when the window redraws, so beside it a speck pulses natively
-    // (no script runs for it) and keeps the window redrawing.
-    const fit = sprite?.path ? Math.min(30 / sprite.w, 24 / sprite.h) : 0;
-    const art = fit ? h_flex().items_center()
+    const fit = sprite?.path ? Math.min(w / sprite.w, h / sprite.h) : 0;
+    return fit ? h_flex().items_center()
         .child(image(sprite.path).w(Math.round(sprite.w * fit)).h(Math.round(sprite.h * fit)))
         .child(div().w(1).h(1).bg("#000000").loop("opacity", { from: 0, to: 0.01, period: 1000 }))
-      : (({ w, h }) => image(`${POKEMON_DIR}/${n}.png`).w(w).h(h))(iconBox(n, 20));
-    return div().id(`poke-${space.id}`).w(30).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
-      .tooltip(`${nameOf(n)}: click to change`)
+      : (({ w: iw, h: ih }) => image(`${POKEMON_DIR}/${n}.png`).w(iw).h(ih))(iconBox(n, Math.round(h * 5 / 6)));
+  }
+
+  // The dev workspace's Pokémon beside its title; a click plays its cry and opens the Edit dialog.
+  // Resting the pointer on it opens a card with the sprite at up to its GIF's own size (scaling
+  // past it blurs the pixels), its name and its National Dex number; a click on the card cries too.
+  pokemonButton(space) {
+    const t = theme();
+    const n = this.pokemon[space.id];
+    const slot = div().id(`poke-${space.id}`).w(30).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
+        const cry = this.cries.get(n);
+        if (cry) playSound(cry);
         openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 680, props: { edit: space.id } });
       })
-      .child(art);
+      .child(this.pokemonArt(n, 30, 24));
+    const sprite = this.sprites.get(n);
+    const w = sprite?.path ? Math.min(sprite.w, CARD_ART) : CARD_ART, h = sprite?.path ? Math.min(sprite.h, CARD_ART) : CARD_ART * 3 / 4;
+    return HoverCard.new(`poke-card-${space.id}`).open_delay(250).close_delay(150).anchor("top_left")
+      .trigger(slot)
+      .content(v_flex().id(`poke-card-body-${space.id}`).w(160).p(12).gap(6).items_center().rounded(10).bg(t.popover).border_1().border_color(t.border)
+        .cursor_pointer().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); const cry = this.cries.get(n); if (cry) playSound(cry); })
+        .child(div().w(CARD_ART).h(CARD_ART).flex().items_center().justify_center().child(this.pokemonArt(n, w, h)))
+        .child(div().text_size(14).font_semibold().text_color(t.foreground).child(nameOf(n)))
+        .child(div().text_size(12).text_color(t.muted).child(`No. ${String(n).padStart(4, "0")}`)));
   }
 
   arm(e) {
@@ -772,7 +913,11 @@ export default class DevWorkspaces extends View {
     if (props()?.moveConfirm) return this.moveConfirm(t);
     this.pokemon = pokemonFor(spaces().map((s) => s.id));
     this.loadSprites(_cx);
-    this.anyWorking = spaces().some((s) => s.status === "working");
+    this.loadCries(_cx);
+    this.balls = ballsFor(spaces().map((s) => s.id));
+    this.loadBalls(_cx);
+    this.publishArt();
+    this.anyWorking = spaces().some((s) => (this.spaceStatus.get(s.id) ?? s.status) === "working");
     const waiting = new Set(spaces().filter((s) => s.status === "blocked").map((s) => s.id));
     for (const id of waiting) if (!this.openedAt.has(id)) this.openedAt.set(id, this.ballTick);
     for (const id of this.openedAt.keys()) if (!waiting.has(id)) this.openedAt.delete(id);

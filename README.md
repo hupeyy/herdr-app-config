@@ -96,7 +96,9 @@ down-right, 2× nearest neighbour, cut into a GIF with [ImageMagick](https://ima
 form's sprite. The 38 SpriteCollab has no sprite for take
 [Pokémon Showdown's gen5ani](https://play.pokemonshowdown.com/sprites/gen5ani/) GIF, and the 18 of
 those that gen5ani lacks too a Black/White-style GIF made from the 2D still by
-`mods/space-panel/tools/gen5-style/gen5gen.py` (Python with Pillow and numpy). Until a sprite is
+`mods/space-panel/tools/gen5-style/gen5gen.py` (Python with Pillow and numpy). Arcanine, Rillaboom and Iron
+Thorns, whose SpriteCollab Idle is one frame, use a hand-made idle (Growlithe's and Tyranitar's
+motion on their own sprite; Thwackey's for Rillaboom) kept locally in `data/pokemon-icons/idlegen`. Until a sprite is
 built, a still menu icon from [PokeAPI/sprites](https://github.com/PokeAPI/sprites) shows. Names
 from [PokeAPI](https://pokeapi.co). Pokémon and all related names are trademarks of Nintendo,
 Creatures and GAME FREAK. This is an unofficial fan mod.

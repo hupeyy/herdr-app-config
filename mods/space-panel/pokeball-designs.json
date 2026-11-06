@@ -1,0 +1,2020 @@
+{
+ "d01": {
+  "closed": [
+   "...ABBA...",
+   ".AAABBAAA.",
+   ".AAAAAAAA.",
+   "BABBAABBAB",
+   "BBBBCCBBBB",
+   "CBBCADCBBC",
+   "BCCCDDCCCB",
+   ".BBBCCBBB.",
+   ".EBEEEEBE.",
+   "...BEEB..."
+  ],
+  "half": [
+   "...ABBA...",
+   ".AAABBAAA.",
+   ".AAAAAAAA.",
+   "BAFFFGGGAB",
+   "BCCCCCCCCB",
+   "BCCCCCCCCB",
+   "BCCCCCCCCB",
+   ".BCCCCCCB.",
+   ".EBEEEEBE.",
+   "...BEEB..."
+  ],
+  "open": [
+   "...ABBA...",
+   ".AAFFGGAA.",
+   ".AFFFGGGA.",
+   "BFFFFGGGGB",
+   "BFFFFGGGGB",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".BCCCCCCB.",
+   "BCCCCCCCCB",
+   "BCCCCCCCCB",
+   ".BCCCCCCB.",
+   ".EBEEEEBE.",
+   "...BEEB..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    255,
+    255
+   ],
+   "B": [
+    11,
+    219,
+    212
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    199,
+    199,
+    199
+   ],
+   "E": [
+    5,
+    55,
+    255
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d02": {
+  "closed": [
+   "...AAAA...",
+   ".AABAAAAA.",
+   ".ABBBAAAA.",
+   "AAABAAAAAA",
+   "AAAACCAAAA",
+   "CAACBDCAAC",
+   "BCCCDDCCCD",
+   ".BBBCCDDD.",
+   ".DBBBDDDD.",
+   "...DDDD..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".AABAAAAA.",
+   ".ABBBAAAA.",
+   "AAEEEFFFAA",
+   "ACCCCCCCCA",
+   "BCCCCCCCCD",
+   "BCCCCCCCCD",
+   ".BCCCCCCD.",
+   ".DBBBDDDD.",
+   "...DDDD..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAEEFFAA.",
+   ".AEEEFFFA.",
+   "AEEEEFFFFA",
+   "AEEEEFFFFA",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".BCCCCCCD.",
+   "BCCCCCCCCD",
+   "BCCCCCCCCD",
+   ".BCCCCCCD.",
+   ".DBBBDDDD.",
+   "...DDDD..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    0,
+    0
+   ],
+   "B": [
+    255,
+    255,
+    255
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    199,
+    199,
+    199
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d03": {
+  "closed": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBBAABBB.",
+   "AABBAABBAA",
+   "AAAACCAAAA",
+   "CAACDECAAC",
+   "DCCCEECCCE",
+   ".DDDCCEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBBAABBB.",
+   "AAFFFGGGAA",
+   "ACCCCCCCCA",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "AFFFFGGGGA",
+   "AFFFFGGGGA",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    0,
+    26,
+    255
+   ],
+   "B": [
+    255,
+    0,
+    0
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d04": {
+  "closed": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".AABBBBAA.",
+   ".AABBBBAA.",
+   ".BBBBBBBB.",
+   ".BBBCDBBB.",
+   "CBBBDDBBBD",
+   ".CCCBBDDD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".AABBBBAA.",
+   ".AEEEFFFA.",
+   ".BBBBBBBB.",
+   "CBBBBBBBBD",
+   "CBBBBBBBBD",
+   ".CBBBBBBD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAEEFFAA.",
+   ".AEEEFFFA.",
+   ".AEEEFFFA.",
+   ".AEEEFFFA.",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".CBBBBBBD.",
+   "CBBBBBBBBD",
+   "CBBBBBBBBD",
+   ".CBBBBBBD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    230,
+    0
+   ],
+   "B": [
+    0,
+    0,
+    0
+   ],
+   "C": [
+    255,
+    255,
+    255
+   ],
+   "D": [
+    199,
+    199,
+    199
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d05": {
+  "closed": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BCCAACCB.",
+   "AACACCACAA",
+   "AAAADDAAAA",
+   "DAADCEDAAD",
+   "CDDDEEDDDE",
+   ".CCCDDEEE.",
+   ".ECCCEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BCCAACCB.",
+   "AAFFFGGGAA",
+   "ADDDDDDDDA",
+   "CDDDDDDDDE",
+   "CDDDDDDDDE",
+   ".CDDDDDDE.",
+   ".ECCCEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "AFFFFGGGGA",
+   "AFFFFGGGGA",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".CDDDDDDE.",
+   "CDDDDDDDDE",
+   "CDDDDDDDDE",
+   ".CDDDDDDE.",
+   ".ECCCEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    133,
+    0,
+    199
+   ],
+   "B": [
+    255,
+    0,
+    255
+   ],
+   "C": [
+    255,
+    255,
+    255
+   ],
+   "D": [
+    0,
+    0,
+    0
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d06": {
+  "closed": [
+   "...AABC...",
+   ".BBBAACBA.",
+   ".AAAAACBB.",
+   "CBCCBBBCAA",
+   "CBCBDDBBCC",
+   "DBBDEFDAAD",
+   "EDDDFFDDDF",
+   ".EEEDDFFF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "half": [
+   "...AABC...",
+   ".BBBAACBA.",
+   ".AAAAACBB.",
+   "CBGGGHHHAA",
+   "CDDDDDDDDC",
+   "EDDDDDDDDF",
+   "EDDDDDDDDF",
+   ".EDDDDDDF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "open": [
+   "...AABC...",
+   ".BBGGHHBA.",
+   ".AGGGHHHB.",
+   "CGGGGHHHHA",
+   "CGGGGHHHHC",
+   ".BGGGHHHB.",
+   "..BBBBBB..",
+   ".EDDDDDDF.",
+   "EDDDDDDDDF",
+   "EDDDDDDDDF",
+   ".EDDDDDDF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "palette": {
+   "A": [
+    168,
+    79,
+    0
+   ],
+   "B": [
+    24,
+    140,
+    6
+   ],
+   "C": [
+    34,
+    201,
+    8
+   ],
+   "D": [
+    0,
+    0,
+    0
+   ],
+   "E": [
+    255,
+    255,
+    255
+   ],
+   "F": [
+    199,
+    199,
+    199
+   ],
+   "G": [
+    162,
+    162,
+    162
+   ],
+   "H": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d07": {
+  "closed": [
+   "..........",
+   "..ABBBBA..",
+   "..BABBAB..",
+   "CCCCAACCCC",
+   "CCCCBBCCCC",
+   "BCCBDEBCCB",
+   "DBBBEEBBBE",
+   ".DDDBBEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "..........",
+   "..ABBBBA..",
+   "..BABBAB..",
+   "CCFFFGGGCC",
+   "CBBBBBBBBC",
+   "DBBBBBBBBE",
+   "DBBBBBBBBE",
+   ".DBBBBBBE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "..........",
+   "..ACCCCA..",
+   "..CFFGGC..",
+   "CCFFFGGGCC",
+   "CFFFFGGGGC",
+   ".CFFFGGGC.",
+   "..CCCCCC..",
+   ".DBBBBBBE.",
+   "DBBBBBBBBE",
+   "DBBBBBBBBE",
+   ".DBBBBBBE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    0,
+    0
+   ],
+   "B": [
+    0,
+    0,
+    0
+   ],
+   "C": [
+    255,
+    170,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d08": {
+  "closed": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBBAABBB.",
+   "ABBBBBBBBA",
+   "AAABCCBAAA",
+   "CABCDECBAC",
+   "ACCCEECCCA",
+   ".ABBCCBBA.",
+   ".BBABBABB.",
+   "...ABBA..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBBAABBB.",
+   "ABFFFGGGBA",
+   "ACCCCCCCCA",
+   "ACCCCCCCCA",
+   "ACCCCCCCCA",
+   ".ACCCCCCA.",
+   ".BBABBABB.",
+   "...ABBA..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "AFFFFGGGGA",
+   "AFFFFGGGGA",
+   ".BFFFGGGB.",
+   "..BBBBBB..",
+   ".ACCCCCCA.",
+   "ACCCCCCCCA",
+   "ACCCCCCCCA",
+   ".ACCCCCCA.",
+   ".BBABBABB.",
+   "...ABBA..."
+  ],
+  "palette": {
+   "A": [
+    11,
+    219,
+    212
+   ],
+   "B": [
+    255,
+    230,
+    0
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d09": {
+  "closed": [
+   "...ABBA...",
+   ".ABAAAABA.",
+   ".BABBBBAB.",
+   ".BBAAAABB.",
+   ".BBBCCBBB.",
+   "CBBCDDCBBC",
+   ".CCCDDCCC.",
+   "....CC....",
+   "..........",
+   ".........."
+  ],
+  "half": [
+   "...ABBA...",
+   ".ABAAAABA.",
+   ".BABBBBAB.",
+   ".BEEEFFFB.",
+   ".BBBBBBBB.",
+   "CBBBBBBBBC",
+   "CBBBBBBBBC",
+   "....BB....",
+   "..........",
+   ".........."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAEEFFAA.",
+   ".AEEEFFFA.",
+   ".AEEEFFFA.",
+   ".AEEEFFFA.",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".CBBBBBBC.",
+   "CBBBBBBBBC",
+   "CBBBBBBBBC",
+   "....BB....",
+   "..........",
+   ".........."
+  ],
+  "palette": {
+   "A": [
+    239,
+    255,
+    13
+   ],
+   "B": [
+    0,
+    0,
+    0
+   ],
+   "C": [
+    255,
+    136,
+    0
+   ],
+   "D": [
+    201,
+    106,
+    0
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d10": {
+  "closed": [
+   "...ABBA...",
+   ".ABABBABA.",
+   ".ABABBABA.",
+   "CABABBABAC",
+   "CCAADDAACC",
+   "DCCDEFDCCD",
+   "EDDDFFDDDF",
+   ".EEEDDFFF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "half": [
+   "...ABBA...",
+   ".ABABBABA.",
+   ".ABABBABA.",
+   "CAGGGHHHAC",
+   "CDDDDDDDDC",
+   "EDDDDDDDDF",
+   "EDDDDDDDDF",
+   ".EDDDDDDF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "open": [
+   "...ABBA...",
+   ".ABGGHHBA.",
+   ".AGGGHHHA.",
+   "CGGGGHHHHC",
+   "CGGGGHHHHC",
+   ".AGGGHHHA.",
+   "..AAAAAA..",
+   ".EDDDDDDF.",
+   "EDDDDDDDDF",
+   "EDDDDDDDDF",
+   ".EDDDDDDF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    0,
+    0
+   ],
+   "B": [
+    255,
+    170,
+    0
+   ],
+   "C": [
+    11,
+    219,
+    212
+   ],
+   "D": [
+    0,
+    0,
+    0
+   ],
+   "E": [
+    255,
+    255,
+    255
+   ],
+   "F": [
+    199,
+    199,
+    199
+   ],
+   "G": [
+    162,
+    162,
+    162
+   ],
+   "H": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d11": {
+  "closed": [
+   "...AAAA...",
+   ".BAABCC...",
+   ".BAABCC...",
+   "BBBAAAA...",
+   "BBBBCCC...",
+   "CBBCDEC...",
+   "DCCCEECCCE",
+   ".DDDCCEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BAABCC...",
+   ".BAABCC...",
+   "BBFFFGG...",
+   "BCCCCCC...",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BAFFGA...",
+   ".BFFFGA...",
+   "BFFFFGA...",
+   "BFFFFGA...",
+   ".AFFFGGAA.",
+   "..AAAAAA..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    230,
+    0
+   ],
+   "B": [
+    11,
+    219,
+    212
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d12": {
+  "closed": [
+   "...AAAA...",
+   ".AAABBAAA.",
+   ".AAABBAAA.",
+   "AACAAAACAA",
+   "ACAADDAACA",
+   "DAADEFDAAD",
+   "EDDDFFDDDF",
+   ".EEEDDFFF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".AAABBAAA.",
+   ".AAABBAAA.",
+   "AAGGGHHHAA",
+   "ADDDDDDDDA",
+   "EDDDDDDDDF",
+   "EDDDDDDDDF",
+   ".EDDDDDDF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAGGHHAA.",
+   ".AGGGHHHA.",
+   "AGGGGHHHHA",
+   "AGGGGHHHHA",
+   ".AGGGHHHA.",
+   "..AAAAAA..",
+   ".EDDDDDDF.",
+   "EDDDDDDDDF",
+   "EDDDDDDDDF",
+   ".EDDDDDDF.",
+   ".FEEEFFFF.",
+   "...FFFF..."
+  ],
+  "palette": {
+   "A": [
+    41,
+    240,
+    10
+   ],
+   "B": [
+    255,
+    230,
+    0
+   ],
+   "C": [
+    255,
+    170,
+    0
+   ],
+   "D": [
+    0,
+    0,
+    0
+   ],
+   "E": [
+    255,
+    255,
+    255
+   ],
+   "F": [
+    199,
+    199,
+    199
+   ],
+   "G": [
+    162,
+    162,
+    162
+   ],
+   "H": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d13": {
+  "closed": [
+   "...ABBA...",
+   ".BACAACAB.",
+   ".BACCCCAB.",
+   "BBBACCABBB",
+   "BBBBDDBBBB",
+   "DBBDAEDBBD",
+   "ADDDEEDDDE",
+   ".AAADDEEE.",
+   ".EAAAEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...ABBA...",
+   ".BACAACAB.",
+   ".BACCCCAB.",
+   "BBFFFGGGBB",
+   "BDDDDDDDDB",
+   "ADDDDDDDDE",
+   "ADDDDDDDDE",
+   ".ADDDDDDE.",
+   ".EAAAEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...ABBA...",
+   ".BAFFGGAB.",
+   ".BFFFGGGB.",
+   "BFFFFGGGGB",
+   "BFFFFGGGGB",
+   ".BFFFGGGB.",
+   "..BBBBBB..",
+   ".ADDDDDDE.",
+   "ADDDDDDDDE",
+   "ADDDDDDDDE",
+   ".ADDDDDDE.",
+   ".EAAAEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    255,
+    255
+   ],
+   "B": [
+    255,
+    87,
+    249
+   ],
+   "C": [
+    251,
+    128,
+    255
+   ],
+   "D": [
+    0,
+    0,
+    0
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d14": {
+  "closed": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBAAAABB.",
+   "AAAAAAAAAA",
+   "ABBACCABBA",
+   "CBBCDECBBC",
+   "DCCCEECCCE",
+   ".DDDCCEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBAAAABB.",
+   "AAFFFGGGAA",
+   "ACCCCCCCCA",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "AFFFFGGGGA",
+   "AFFFFGGGGA",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    150,
+    150,
+    150
+   ],
+   "B": [
+    13,
+    0,
+    130
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d15": {
+  "closed": [
+   "...AABA...",
+   ".AAABAAAA.",
+   ".AAAABAAA.",
+   "BAAABAAAAB",
+   "BBAACCAABB",
+   "CBBCDECBBC",
+   "BCCCEECCCB",
+   ".BBDCCEBB.",
+   ".BDDDEEEB.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AABA...",
+   ".AAABAAAA.",
+   ".AAAABAAA.",
+   "BAFFFGGGAB",
+   "BCCCCCCCCB",
+   "BCCCCCCCCB",
+   "BCCCCCCCCB",
+   ".BCCCCCCB.",
+   ".BDDDEEEB.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AABA...",
+   ".AAFFGGAA.",
+   ".AFFFGGGA.",
+   "BFFFFGGGGB",
+   "BFFFFGGGGB",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".BCCCCCCB.",
+   "BCCCCCCCCB",
+   "BCCCCCCCCB",
+   ".BCCCCCCB.",
+   ".BDDDEEEB.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    170,
+    0
+   ],
+   "B": [
+    255,
+    230,
+    0
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d16": {
+  "closed": [
+   "...AAAA...",
+   "...BAAB...",
+   "...BBBB...",
+   "ABBAAAABBA",
+   "ABBACCABBA",
+   "CBACDCCABC",
+   "ACCCCCCCCA",
+   "..AACCAA..",
+   "...AAAA...",
+   ".........."
+  ],
+  "half": [
+   "...AAAA...",
+   "...BAAB...",
+   "...BBBB...",
+   "ABEEEFFFBA",
+   "ABBBBBBBBA",
+   "ABBBBBBBBA",
+   "ABBBBBBBBA",
+   "..BBBBBB..",
+   "...AAAA...",
+   ".........."
+  ],
+  "open": [
+   "...AAAA...",
+   "...AEFA...",
+   "...AEFA...",
+   "AAAEEFFAAA",
+   "AEEEEFFFFA",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".ABBBBBBA.",
+   "ABBBBBBBBA",
+   "ABBBBBBBBA",
+   "..BBBBBB..",
+   "...AAAA...",
+   ".........."
+  ],
+  "palette": {
+   "A": [
+    34,
+    201,
+    8
+   ],
+   "B": [
+    0,
+    0,
+    0
+   ],
+   "C": [
+    255,
+    136,
+    0
+   ],
+   "D": [
+    255,
+    170,
+    0
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d17": {
+  "closed": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".BBBAABBB.",
+   "BBBAAAABBB",
+   "BBAACCAABB",
+   "CBBCDECBBC",
+   "BCCCEECCCB",
+   ".BBBCCBBB.",
+   ".BBBAABBB.",
+   "...BAAB..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".BBBAABBB.",
+   "BBFFFGGGBB",
+   "BHHHHHHHHB",
+   "BHHHHHHHHB",
+   "BHHHHHHHHB",
+   ".BHHHHHHB.",
+   ".BBBAABBB.",
+   "...BAAB..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAFFGGAA.",
+   ".BFFFGGGB.",
+   "BFFFFGGGGB",
+   "BFFFFGGGGB",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".BHHHHHHB.",
+   "BHHHHHHHHB",
+   "BHHHHHHHHB",
+   ".BHHHHHHB.",
+   ".BBBAABBB.",
+   "...BAAB..."
+  ],
+  "palette": {
+   "A": [
+    251,
+    128,
+    255
+   ],
+   "B": [
+    255,
+    246,
+    117
+   ],
+   "C": [
+    11,
+    219,
+    212
+   ],
+   "D": [
+    255,
+    87,
+    249
+   ],
+   "E": [
+    133,
+    0,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ],
+   "H": [
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "d18": {
+  "closed": [
+   "...AAAA...",
+   ".BABBBBAB.",
+   ".BBBAABBB.",
+   "BBABBBBABB",
+   "BBBACCABBB",
+   "CBBCDECBBC",
+   "DCCCEECCCE",
+   ".DDDCCEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BABBBBAB.",
+   ".BBBAABBB.",
+   "BBFFFGGGBB",
+   "BCCCCCCCCB",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BAFFGGAB.",
+   ".BFFFGGGB.",
+   "BFFFFGGGGB",
+   "BFFFFGGGGB",
+   ".BFFFGGGB.",
+   "..BBBBBB..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    230,
+    0
+   ],
+   "B": [
+    224,
+    111,
+    0
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d19": {
+  "closed": [
+   "...AABB...",
+   ".AAAAABBB.",
+   ".AAAAAABB.",
+   "AAAAAAAABB",
+   "AAAACCABBB",
+   "CAACABCBBC",
+   "ACCCBBCCCB",
+   ".AAACCBBB.",
+   ".BAAABBBB.",
+   "...BBBB..."
+  ],
+  "half": [
+   "...AABB...",
+   ".AAAAABBB.",
+   ".AAAAAABB.",
+   "AADDDEEEBB",
+   "AFFFFFFFFB",
+   "AFFFFFFFFB",
+   "AFFFFFFFFB",
+   ".AFFFFFFB.",
+   ".BAAABBBB.",
+   "...BBBB..."
+  ],
+  "open": [
+   "...AABB...",
+   ".AADDEEBB.",
+   ".ADDDEEEB.",
+   "ADDDDEEEEB",
+   "ADDDDEEEEB",
+   ".ADDDEEEA.",
+   "..AAAAAA..",
+   ".AFFFFFFB.",
+   "AFFFFFFFFB",
+   "AFFFFFFFFB",
+   ".AFFFFFFB.",
+   ".BAAABBBB.",
+   "...BBBB..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    255,
+    255
+   ],
+   "B": [
+    199,
+    199,
+    199
+   ],
+   "C": [
+    255,
+    0,
+    0
+   ],
+   "D": [
+    162,
+    162,
+    162
+   ],
+   "E": [
+    121,
+    121,
+    121
+   ],
+   "F": [
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "d20": {
+  "closed": [
+   "...AAAA...",
+   ".BBACCABB.",
+   ".BBAAAABB.",
+   "BBBACCABBB",
+   "BBAACCAABB",
+   "CBACDECABC",
+   "DCCCEECCCE",
+   ".DDDCCEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBACCABB.",
+   ".BBAAAABB.",
+   "BBFFFGGGBB",
+   "BCCCCCCCCB",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "BFFFFGGGGB",
+   "BFFFFGGGGB",
+   ".BFFFGGGB.",
+   "..BBBBBB..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    230,
+    0
+   ],
+   "B": [
+    255,
+    0,
+    0
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d21": {
+  "closed": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBBAABBB.",
+   "ACBBAABBCA",
+   "ACCCDDCCCA",
+   "DCCDCEDCCD",
+   "CDDDEEDDDE",
+   ".CCCDDEEE.",
+   ".ECCCEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBBAABBB.",
+   "ACFFFGGGCA",
+   "ADDDDDDDDA",
+   "CDDDDDDDDE",
+   "CDDDDDDDDE",
+   ".CDDDDDDE.",
+   ".ECCCEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "AFFFFGGGGA",
+   "AFFFFGGGGA",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".CDDDDDDE.",
+   "CDDDDDDDDE",
+   "CDDDDDDDDE",
+   ".CDDDDDDE.",
+   ".ECCCEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    255,
+    0,
+    0
+   ],
+   "B": [
+    105,
+    105,
+    105
+   ],
+   "C": [
+    255,
+    255,
+    255
+   ],
+   "D": [
+    0,
+    0,
+    0
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d22": {
+  "closed": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBAAAABB.",
+   "ABBBBBBBBA",
+   "BAAACCAAAB",
+   "CBBCDECBBC",
+   "DCCCEECCCE",
+   ".DDDCCEEE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BBAAAABB.",
+   ".BBAAAABB.",
+   "ABFFFGGGBA",
+   "BCCCCCCCCB",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BBFFGGBB.",
+   ".BFFFGGGB.",
+   "AFFFFGGGGA",
+   "BFFFFGGGGB",
+   ".AFFFGGGA.",
+   "..AAAAAA..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EDDDEEEE.",
+   "...EEEE..."
+  ],
+  "palette": {
+   "A": [
+    17,
+    99,
+    4
+   ],
+   "B": [
+    168,
+    39,
+    7
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    162,
+    162,
+    162
+   ],
+   "G": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d23": {
+  "closed": [
+   "...ABBA...",
+   ".AAABBAAA.",
+   ".BABAABAB.",
+   "AABAAAABAA",
+   "ABAABBAABA",
+   "BAABCDBAAB",
+   "CBBBDDBBBD",
+   ".CCCBBDDD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "half": [
+   "...ABBA...",
+   ".AAABBAAA.",
+   ".BABAABAB.",
+   "AAEEEFFFAA",
+   "ABBBBBBBBA",
+   "CBBBBBBBBD",
+   "CBBBBBBBBD",
+   ".CBBBBBBD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAEEFFAA.",
+   ".AEEEFFFA.",
+   "AEEEEFFFFA",
+   "AEEEEFFFFA",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".CBBBBBBD.",
+   "CBBBBBBBBD",
+   "CBBBBBBBBD",
+   ".CBBBBBBD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "palette": {
+   "A": [
+    8,
+    166,
+    160
+   ],
+   "B": [
+    0,
+    0,
+    0
+   ],
+   "C": [
+    255,
+    255,
+    255
+   ],
+   "D": [
+    199,
+    199,
+    199
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d24": {
+  "closed": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".AAAAAAAA.",
+   "AAABBBBAAA",
+   "BAABCCBAAB",
+   "CBACDCCABC",
+   "ACCCCCCCCA",
+   ".AABCCBAA.",
+   ".AABBBBAA.",
+   "...AAAA..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".AAAAAAAA.",
+   "AAEEEFFFAA",
+   "BBBBBBBBBB",
+   "ABBBBBBBBA",
+   "ABBBBBBBBA",
+   ".ABBBBBBA.",
+   ".AABBBBAA.",
+   "...AAAA..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAEEFFAA.",
+   ".AEEEFFFA.",
+   "AEEEEFFFFA",
+   "AEEEEFFFFA",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".ABBBBBBA.",
+   "ABBBBBBBBA",
+   "ABBBBBBBBA",
+   ".ABBBBBBA.",
+   ".AABBBBAA.",
+   "...AAAA..."
+  ],
+  "palette": {
+   "A": [
+    168,
+    79,
+    0
+   ],
+   "B": [
+    0,
+    0,
+    0
+   ],
+   "C": [
+    255,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    71,
+    51
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ]
+  }
+ },
+ "d25": {
+  "closed": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".AAAAAAAA.",
+   "AAAAAAAAAA",
+   "AAAABBAAAA",
+   "BAABAABAAB",
+   "CBBBAABBBD",
+   ".CCCBBDDD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".AAAAAAAA.",
+   ".AAAAAAAA.",
+   "AAEEEFFFAA",
+   "AGGGGGGGGA",
+   "CGGGGGGGGD",
+   "CGGGGGGGGD",
+   ".CGGGGGGD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".AAEEFFAA.",
+   ".AEEEFFFA.",
+   "AEEEEFFFFA",
+   "AEEEEFFFFA",
+   ".AEEEFFFA.",
+   "..AAAAAA..",
+   ".CGGGGGGD.",
+   "CGGGGGGGGD",
+   "CGGGGGGGGD",
+   ".CGGGGGGD.",
+   ".DCCCDDDD.",
+   "...DDDD..."
+  ],
+  "palette": {
+   "A": [
+    239,
+    255,
+    13
+   ],
+   "B": [
+    11,
+    219,
+    212
+   ],
+   "C": [
+    255,
+    255,
+    255
+   ],
+   "D": [
+    199,
+    199,
+    199
+   ],
+   "E": [
+    162,
+    162,
+    162
+   ],
+   "F": [
+    121,
+    121,
+    121
+   ],
+   "G": [
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "d26": {
+  "closed": [
+   "...AAAA...",
+   ".BAAAAABB.",
+   ".BAAAABBB.",
+   "BBBBAABBBB",
+   "BBBBCCBBBB",
+   "CBBCDECBBC",
+   "DCCCEECCCE",
+   ".DDFCCEFE.",
+   ".EFFFFEFF.",
+   "...FFFF..."
+  ],
+  "half": [
+   "...AAAA...",
+   ".BAAAAABB.",
+   ".BAAAABBB.",
+   "BBGGGHHHBB",
+   "BCCCCCCCCB",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EFFFFEFF.",
+   "...FFFF..."
+  ],
+  "open": [
+   "...AAAA...",
+   ".BAGGHHBB.",
+   ".BGGGHHHB.",
+   "BGGGGHHHHB",
+   "BGGGGHHHHB",
+   ".BGGGHHHB.",
+   "..BBBBBB..",
+   ".DCCCCCCE.",
+   "DCCCCCCCCE",
+   "DCCCCCCCCE",
+   ".DCCCCCCE.",
+   ".EFFFFEFF.",
+   "...FFFF..."
+  ],
+  "palette": {
+   "A": [
+    212,
+    0,
+    127
+   ],
+   "B": [
+    255,
+    87,
+    249
+   ],
+   "C": [
+    0,
+    0,
+    0
+   ],
+   "D": [
+    255,
+    255,
+    255
+   ],
+   "E": [
+    199,
+    199,
+    199
+   ],
+   "F": [
+    189,
+    0,
+    113
+   ],
+   "G": [
+    162,
+    162,
+    162
+   ],
+   "H": [
+    121,
+    121,
+    121
+   ]
+  }
+ }
+}

@@ -5,17 +5,22 @@
 // here: the GIF is cropped to the box its pixels fill, so it fits the card; an Idle without a
 // Walk counts, and 4 Pokémon use a form's sprite (FORMS). SpriteCollab has none for 38: those take
 // Pokémon Showdown's gen5ani GIF, or, for the 18 gen5ani lacks too, a Black/White-style GIF made
-// from the 2D still (tools/gen5-style, in data/.../gen5gen).
+// from the 2D still (tools/gen5-style, in data/.../gen5gen). Arcanine, Rillaboom and Iron Thorns, whose Idle is
+// one frame, take an idle made from a relative's motion (data/.../idlegen).
 import { exec, appHome, readTextFile, writeTextFile } from "herdr";
 import { nameOf } from "./pokemon-names.js";
 
 const ICONS_REL = "data/pokemon-icons";
 export const SPRITES_REL = `${ICONS_REL}/agents`;
 const GENERATED_REL = `${ICONS_REL}/gen5gen`;
+// Hand-picked idles made from a relative's motion, for Pokémon whose SpriteCollab Idle is one frame.
+const IDLEGEN_REL = `${ICONS_REL}/idlegen`;
+const IDLEGEN = new Set([59, 812, 995]);
 const PMD = "https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite";
 const GEN5ANI = "https://play.pokemonshowdown.com/sprites/gen5ani";
-// Bump when the recipe changes, so cached sprites are rebuilt.
-const VERSION = 2;
+// Bump when the recipe changes, so cached sprites are rebuilt. The GIF's name carries it: herdr
+// keeps a decoded image by path, so a GIF rewritten in place stays frozen on the old copy.
+export const VERSION = 3;
 // PMD sheet rows by facing: 0 down, 1 down-right, ... The card stands it toward its title.
 const IDLE_ROW = 1;
 // Pokémon whose only SpriteCollab sprite is a form's: its folder (shiny groups skipped).
@@ -106,13 +111,20 @@ export async function loadSprite(id) {
   const rel = `${SPRITES_REL}/${pad(id)}`;
   const dir = `${appHome()}/${rel}`;
   const metaFile = `${dir}/meta.json`;
+  const old = await readTextFile(metaFile).catch(() => null);
   try {
-    const meta = JSON.parse(await readTextFile(metaFile));
+    const meta = JSON.parse(old);
     if (meta.version === VERSION) return meta;
   } catch {}
   let meta = null;
+  if (IDLEGEN.has(id)) {
+    const size = await gifSize(`${appHome()}/${IDLEGEN_REL}/${id}.gif`).catch(() => null);
+    if (size) meta = { path: `${IDLEGEN_REL}/${id}.gif`, ...size, source: "idlegen" };
+    // No download made the sprite's folder, and meta.json goes there.
+    await exec("powershell", ["-NoProfile", "-Command", `New-Item -ItemType Directory -Force -Path '${dir}' | Out-Null`]).catch(() => null);
+  }
   const base = `${PMD}/${FORMS[id] ?? pad(id)}`;
-  if (await curl([[`${dir}/AnimData.xml`, `${base}/AnimData.xml`]])) {
+  if (!meta && await curl([[`${dir}/AnimData.xml`, `${base}/AnimData.xml`]])) {
     const anims = parseAnims(await readTextFile(`${dir}/AnimData.xml`).catch(() => ""));
     const walk = resolve(anims, "Walk");
     // Unlike herdr-pokemon-agents, an Idle alone is enough (the card never walks).
@@ -121,13 +133,13 @@ export async function loadSprite(id) {
       if (await curl([[`${dir}/${idle.name}.png`, `${base}/${idle.name}-Anim.png`]])) {
         // Big Pokémon (Onix, Gyarados...) have big frames: draw those at 1x.
         const scale = (walk ?? idle).fh > 64 ? 1 : 2;
-        const size = await cut(`${dir}/${idle.name}.png`, idle, IDLE_ROW, scale, `${dir}/idle.gif`);
-        meta = { path: `${rel}/idle.gif`, ...size, source: "SpriteCollab" };
+        const size = await cut(`${dir}/${idle.name}.png`, idle, IDLE_ROW, scale, `${dir}/idle-${VERSION}.gif`);
+        meta = { path: `${rel}/idle-${VERSION}.gif`, ...size, source: "SpriteCollab" };
       }
     }
   }
-  if (!meta && await curl([[`${dir}/idle.gif`, `${GEN5ANI}/${showdownId(nameOf(id))}.gif`]], true)) {
-    meta = { path: `${rel}/idle.gif`, ...(await gifSize(`${dir}/idle.gif`)), source: "gen5ani" };
+  if (!meta && await curl([[`${dir}/idle-${VERSION}.gif`, `${GEN5ANI}/${showdownId(nameOf(id))}.gif`]], true)) {
+    meta = { path: `${rel}/idle-${VERSION}.gif`, ...(await gifSize(`${dir}/idle-${VERSION}.gif`)), source: "gen5ani" };
   }
   if (!meta) {
     const file = `${appHome()}/${GENERATED_REL}/${id}.gif`;
@@ -136,6 +148,7 @@ export async function loadSprite(id) {
   }
   if (!meta) return null;
   meta = { version: VERSION, id, ...meta };
-  await writeTextFile(metaFile, JSON.stringify(meta), null);
+  // writeTextFile replaces a file only when told its current text (null creates a new one).
+  await writeTextFile(metaFile, JSON.stringify(meta), old);
   return meta;
 }

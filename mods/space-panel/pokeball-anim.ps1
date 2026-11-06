@@ -1,6 +1,10 @@
 # The Poké Ball on space-panel's cards, pixel for pixel after the classic 12-pixel sprite: seen
 # from a little above, so the band curves down and the button sits low on the front.
 #   pokeball-v<V>-still.png   idle
+#   pokeball-v<V>-pick.png    the closed ball alone at 3x, for space-new's Edit dialog
+#   pokeball-v<V>-sheet.png   every card frame in one row of 24x24 cells: still, c0-21, s0-17,
+#                             o0-6, open. The card shows one cell at a time: one image stays
+#                             loaded, where swapping files each tick made the ball flash.
 #   pokeball-v<V>-c<n>.png    an agent works: rocks one way, rocks the other way, bounces once
 #   pokeball-v<V>-s<n>.png    an agent's shell runs: turns flat about its centre, circling streaks
 #   pokeball-v<V>-o<n>.png    an agent starts waiting: closed, half open, open, with a small hop
@@ -8,7 +12,10 @@
 # The open ball is 16 rows tall, the closed one 12. Frames are 18x24 (spin frames 24x24) with
 # the ground near the bottom; nearest-neighbour scaling keeps the pixels. Files are named pokeball-v<Version>-...: herdr caches images by path, so a new
 # look needs new names (space-panel's BALL_VERSION passes the version). Earlier looks: ./archive.
-param([Parameter(Mandatory)][string]$Dir, [string]$Version = '16')
+# -Design picks another ball from pokeball-designs.json (its closed, half and open maps and their
+# palette); without it, the classic ball below.
+param([Parameter(Mandatory)][string]$Dir, [string]$Version = '16', [string]$Design = '',
+    [string]$DesignFile = '')
 
 Add-Type -AssemblyName System.Drawing
 
@@ -78,6 +85,15 @@ $fullOpen = @(
     '..KKLLLLKK..',
     '....KKKK....'
 )
+if ($Design) {
+    # Not a param default: there $PSScriptRoot can be empty under powershell -File.
+    if (-not $DesignFile) { $DesignFile = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'pokeball-designs.json' }
+    $d = (Get-Content -Raw -LiteralPath $DesignFile | ConvertFrom-Json).$Design
+    if (-not $d) { throw "no design '$Design' in $DesignFile" }
+    $palette = @{}
+    foreach ($p in $d.palette.PSObject.Properties) { $palette[$p.Name] = @($p.Value) }
+    $closed = @($d.closed); $halfOpen = @($d.half); $fullOpen = @($d.open)
+}
 $ball = Map-Bitmap $closed
 $half = Map-Bitmap $halfOpen
 $open = Map-Bitmap $fullOpen
@@ -164,6 +180,12 @@ function Save-Spin($angle, $turning, $path) {
 $i = 0
 foreach ($f in $frames) { Save-Frame $ball $f[0] $f[1] $f[2] $f[3] (Join-Path $Dir "pokeball-v$Version-c$i.png"); $i++ }
 Save-Frame $ball 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-still.png")
+$pick = New-Object System.Drawing.Bitmap ($bw * 3), ($bh * 3)
+$pg = [System.Drawing.Graphics]::FromImage($pick)
+$pg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+$pg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+$pg.DrawImage($ball, 0, 0, ($bw * 3), ($bh * 3)); $pg.Dispose()
+$pick.Save((Join-Path $Dir "pokeball-v$Version-pick.png"), [System.Drawing.Imaging.ImageFormat]::Png); $pick.Dispose()
 Save-Frame $open 0 1 1 0 (Join-Path $Dir "pokeball-v$Version-open.png")
 # Opening, after the classic sheet: a squash, the lid pops to half open as the ball hops, then
 # it lands fully open. The card then holds open.png.
@@ -176,6 +198,16 @@ foreach ($f in $opening) { Save-Frame $f[0] $f[1] $f[2] $f[3] 0 (Join-Path $Dir 
 $s = 0
 foreach ($angle in $spin) { Save-Spin $angle ($s -lt $spinTurns) (Join-Path $Dir "pokeball-v$Version-s$s.png"); $s++ }
 # space-panel draws the frames again when this marker is missing.
+$cells = @('still') + (0..21 | ForEach-Object { "c$_" }) + (0..17 | ForEach-Object { "s$_" }) + (0..6 | ForEach-Object { "o$_" }) + @('open')
+$sheet = New-Object System.Drawing.Bitmap (24 * $cells.Count), 24
+$sg = [System.Drawing.Graphics]::FromImage($sheet)
+for ($k = 0; $k -lt $cells.Count; $k++) {
+    $f = [System.Drawing.Image]::FromFile((Join-Path $Dir "pokeball-v$Version-$($cells[$k]).png"))
+    # 18-wide frames sit centred in their 24-wide cell.
+    $sg.DrawImageUnscaled($f, 24 * $k + [int]((24 - $f.Width) / 2), 0); $f.Dispose()
+}
+$sg.Dispose()
+$sheet.Save((Join-Path $Dir "pokeball-v$Version-sheet.png"), [System.Drawing.Imaging.ImageFormat]::Png); $sheet.Dispose()
 Set-Content -Path (Join-Path $Dir "pokeball-v$Version-ready") -Value $i
 $ball.Dispose(); $half.Dispose(); $open.Dispose()
 "$i"

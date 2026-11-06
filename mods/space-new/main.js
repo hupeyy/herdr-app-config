@@ -2,7 +2,7 @@
 //   (none)            New workspace: a root (folder, name, color, icon) and its first dev workspace
 //   { editRoot: id }  Edit workspace: a root's name, folder, color, icon
 //   { newDev: id }    New dev workspace in that root: name, folder, color, icon, what it starts with
-//   { edit: spaceId } Edit dev workspace: name, color, icon, Pokémon
+//   { edit: spaceId } Edit dev workspace: name, Poké Ball, Pokémon
 // A dev workspace is a herdr space. space.new returns no id, so a new one's color, icon and root
 // wait in shared("space.pending"), which the root strip (space-tabs) applies once it appears.
 
@@ -23,6 +23,24 @@ const roots = () => shared("roots") ?? [];
 const POKEMON = "space.pokemon";
 const POKEMON_ICON = (n) => `data/pokemon-icons/${n}.png`;
 const POKE_SHOWN = 240;
+// A dev workspace's Poké Ball. space-panel picks one at random and draws every design's frames;
+// BALL_VERSION and BALLS must match its own.
+const BALL_PICK = "space.balls";
+const BALL_VERSION = "22";
+// #2 is left out: it is the classic ball again.
+const BALLS = ["classic", ...Array.from({ length: 26 }, (_, i) => `d${String(i + 1).padStart(2, "0")}`).filter((d) => d !== "d02")];
+// The closed ball at 3x (pokeball-anim.ps1's pick.png), shown at its own size so it stays sharp:
+// 36 px for the classic 12-pixel ball, 30 for the 10-pixel designs.
+const BALL_PICK_IMG = (d) => `data/pokemon-icons/pokeball-v${BALL_VERSION}-${d}-pick.png`;
+const ballImage = (d) => { const px = d === "classic" ? 36 : 30; return image(BALL_PICK_IMG(d)).w(px).h(px); };
+const BALL_NAMES = {
+  classic: "Poké Ball", d01: "Dive Ball", d03: "Great Ball", d04: "Ultra Ball", d05: "Master Ball", d06: "Safari Ball",
+  d07: "Level Ball", d08: "Quick Ball", d09: "Luxury Ball", d10: "Lure Ball", d11: "Moon Ball", d12: "Friend Ball",
+  d13: "Love Ball", d14: "Heavy Ball", d15: "Fast Ball", d16: "Dusk Ball", d17: "Heal Ball", d18: "Sport Ball",
+  d19: "Premier Ball", d20: "Repeat Ball", d21: "Timer Ball", d22: "Nest Ball", d23: "Net Ball", d24: "Cherish Ball",
+  d25: "Park Ball", d26: "Dream Ball",
+};
+const ballLabel = (d) => BALL_NAMES[d] ?? d;
 
 export default class WorkspaceDialog extends View {
   init(_props, cx) {
@@ -53,6 +71,7 @@ export default class WorkspaceDialog extends View {
       this.color = (shared("space.colors") ?? {})[this.space.id] ?? "ansi6";
       this.icon = (shared("space.icons") ?? {})[this.space.id] ?? null;
       this.pokemon = (shared(POKEMON) ?? {})[this.space.id] ?? null;
+      this.ball = (shared(BALL_PICK) ?? {})[this.space.id] ?? "classic";
       this.pokeSearch = InputState.new({ placeholder: "Search by name or number" });
       this.pokeSearch.on("change", (_e, cx) => cx.notify());
     }
@@ -102,10 +121,7 @@ export default class WorkspaceDialog extends View {
       if (s) {
         // "" gives the space herdr's own name again (after its folder).
         if (name !== (s.named ? s.name : "")) run("space.rename", { id: s.id, name });
-        setShared("space.colors", { ...(shared("space.colors") ?? {}), [s.id]: this.color });
-        const icons = { ...(shared("space.icons") ?? {}) };
-        if (this.icon) icons[s.id] = this.icon; else delete icons[s.id];
-        setShared("space.icons", icons);
+        setShared(BALL_PICK, { ...(shared(BALL_PICK) ?? {}), [s.id]: this.ball });
         if (this.pokemon) setShared(POKEMON, { ...(shared(POKEMON) ?? {}), [s.id]: this.pokemon });
       }
       this.close();
@@ -163,6 +179,18 @@ export default class WorkspaceDialog extends View {
           .child(`Showing ${shown.length} of ${matches.length}: search to find the rest.`))));
   }
 
+  // Edit mode: the dev workspace's Poké Ball, from every design's still frame (drawn 2x).
+  ballSection(t) {
+    return h_flex().flex_wrap().gap(4).role("list_box").accessibility_label("Poké Ball")
+      .children(BALLS.map((d, i) => div().id(`ball-${d}`).w(44).h(44).flex().items_center()
+      .justify_center().rounded(7).cursor_pointer().tooltip(ballLabel(d))
+      .role("list_box_option").accessibility_label(ballLabel(d)).aria_selected(d === this.ball).set_position(i + 1, BALLS.length)
+      .border_1().border_color(d === this.ball ? t.accent : t.border).bg(d === this.ball ? t.selected : t.surface)
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { this.ball = d; cx.notify(); })
+      .child(ballImage(d))));
+  }
+
   section(t, label, child) {
     return v_flex().gap(6).child(div().text_size(11.5).font_medium().text_color(t.dim).child(label)).child(child);
   }
@@ -203,7 +231,7 @@ export default class WorkspaceDialog extends View {
         if (e.key === "escape") { this.close(); cx.stop_propagation(); }
       })
       .child(h_flex().px(20).pt(18).pb(12).gap(12).items_center().flex_none().border_b(1).border_color(t.border)
-        .child(tile(34, this.icon))
+        .child(this.mode === "edit" ? ballImage(this.ball).accessibility_label(ballLabel(this.ball)) : tile(34, this.icon))
         .child(v_flex().flex_1().min_w(0)
           .child(div().text_size(15).font_semibold().text_color(t.foreground).child(titles[this.mode]))
           .child(div().truncate().text_size(12).text_color(t.dim).child(label)))
@@ -214,7 +242,8 @@ export default class WorkspaceDialog extends View {
           .child(h_flex().gap(8).child(this.field(t, this.folder)).child(button("browse", "Browse…", (cx) => this.browse(cx), false)))
           .when(this.recent.length > 0, (el) => el.child(h_flex().gap(6).flex_wrap().children(this.recent.map((f, i) =>
             this.chip(t, `recent-${i}`, basename(f), this.folder.value().trim() === f, () => { this.folder.set_value(f); this.error = ""; }).tooltip(f))))))))
-        .child(this.section(t, "Color", h_flex().gap(8).children(Object.entries(MARK).map(([key, hex]) =>
+        .when(this.mode === "edit", (el) => el.child(this.section(t, "Poké Ball", this.ballSection(t))))
+        .when(this.mode !== "edit", (el) => el.child(this.section(t, "Color", h_flex().gap(8).children(Object.entries(MARK).map(([key, hex]) =>
           div().id(`color-${key}`).size(26).rounded(13).bg(hex).cursor_pointer()
             .border_2().border_color(this.color === key ? t.foreground : t.popover)
             .on_click((_e, cx) => { this.color = key; cx.notify(); })))))
@@ -224,7 +253,7 @@ export default class WorkspaceDialog extends View {
             .border_1().border_color(this.icon === name ? t.accent : t.border).bg(this.icon === name ? t.selected : t.surface)
             .text_color(this.icon === name ? t.foreground : t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(name)
             .on_click((_e, cx) => { this.icon = name; cx.notify(); })
-            .child(svg(ICON(name)).size(15))))))
+            .child(svg(ICON(name)).size(15)))))))
         .when(this.mode === "edit" && Boolean(this.pokeSearch), (el) => el.child(this.section(t, "Pokémon", this.pokemonSection(t))))
         .when(showStart, (el) => el.child(this.section(t, "Start with", v_flex().gap(8)
           .child(h_flex().gap(6).flex_wrap()
