@@ -3,7 +3,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, TextareaState } from "gpui-base";
-import { spaces, focused, panes, props, theme, layout, closeOverlay, run, shared, setShared } from "herdr";
+import { spaces, focused, panes, props, theme, layout, closeOverlay, run, shared, setShared, settings } from "herdr";
 
 // One board at a time. An open board holds a lease in shared("tasks.board"), renewed every 15 s
 // and cleared by close(); a crash that skips close() lets it lapse after 40 s. The rail never
@@ -44,8 +44,17 @@ function find(node, id) {
   }
   return null;
 }
-// The rail goes compact by the width of the column it sits in (props.column), like the shipped sidebar.
-const narrow = () => (find(layout(), props()?.column ?? "sidebar")?.size?.px ?? Infinity) < 160;
+// The rail goes compact when it is drawn under 160 px. Its measured width (on_size_change) decides;
+// before the first measure, the column's layout size clamped to its min and max. The raw px alone
+// misleads: a panel dragged to 24 px stays in the layout while herdr draws it at its 280 px min.
+const COMPACT_PX = 160;
+function layoutWidth() {
+  const col = find(layout(), props()?.column ?? "sidebar");
+  const px = col?.size?.px;
+  if (px == null) return Infinity;
+  return Math.min(Math.max(px, col.min ?? 0), col.max ?? Infinity);
+}
+const narrow = (measured) => (measured ?? layoutWidth()) < COMPACT_PX;
 // Under Agents the rail needs a top border; alone in its own column it does not.
 const ownColumn = () => Boolean(props()?.column);
 
@@ -261,10 +270,17 @@ export default class Tasks extends View {
     const inProgress = withMoves(snap?.tickets ?? []).filter((x) => x.mine && x.category === "indeterminate");
     const stale = snap && Date.now() - snap.at > STALE_MS;
 
-    if (narrow()) {
+    // Both rail views report their drawn width, so switching between them follows the real size.
+    const measure = (size, cx) => {
+      const width = size.width / (settings().zoom || 1); // layout px, like COMPACT_PX
+      if (Math.abs((this.railWidth ?? -1) - width) < 1) return;
+      this.railWidth = width;
+      cx.notify();
+    };
+    if (narrow(this.railWidth)) {
       const count = (n, tone, label) => v_flex().items_center().gap(1).tooltip(label)
         .child(div().text_size(12).font_medium().text_color(n ? t[tone] : t.dim).child(String(n)));
-      return v_flex().id("tasks-rail").size_full().bg(t.chrome).when(!ownColumn(), (el) => el.border_t(1).border_color(t.border))
+      return v_flex().id("tasks-rail").size_full().on_size_change(measure).bg(t.chrome).when(!ownColumn(), (el) => el.border_t(1).border_color(t.border))
         .pt(10).gap(8).items_center().cursor_pointer().on_click(() => run("mod.open", { name: "tasks" }))
         .child(svg(ICON("layers")).size(15).text_color(stale ? ink(t, "blocked", paper) : t.dim))
         .child(count(snap?.review.length ?? 0, "blocked", "Review requests"))
@@ -311,7 +327,7 @@ export default class Tasks extends View {
       ]), "jira"),
     ];
 
-    return v_flex().id("tasks-rail").size_full().min_h(0).bg(t.chrome).when(!ownColumn(), (el) => el.border_t(1).border_color(t.border)).text_size(12.5)
+    return v_flex().id("tasks-rail").size_full().min_h(0).on_size_change(measure).bg(t.chrome).when(!ownColumn(), (el) => el.border_t(1).border_color(t.border)).text_size(12.5)
       .child(h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().gap(8)
         .child(div().flex_1().text_size(11.5).font_medium().text_color(t.dim).child("Tasks"))
         .child(div().id("rail-age").text_size(11).text_color(stale ? ink(t, "blocked", paper) : t.dim)
