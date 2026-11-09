@@ -9,7 +9,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, home } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, home, watchFolder, readTextFile, writeTextFile } from "herdr";
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
@@ -61,7 +61,81 @@ function applyPending() {
   setShared("space.pending", null);
 }
 
+// ---- hx bridge ----
+// The hx CLI (~/.config/herdr-app/hx) changes workspaces (roots) through this mod, because only a
+// mod can write shared state. hx writes data/hx/req-<id>.json; this applies it and answers in
+// res-<id>.json. The answer is first written as a claim (create-only), so a second copy of this
+// mod cannot apply the same request twice.
+const HX_DIR = () => `${home()}/.config/herdr-app/data/hx`;
+const HX_RETRY_MS = 3000;
+
+function hxApply(req) {
+  const list = roots();
+  const find = (id) => list.find((r) => r.id === id) ?? null;
+  switch (req.op) {
+    case "root.add": {
+      if (!req.name || !req.folder) throw new Error("root.add needs name and folder");
+      const id = `r-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      setShared("roots", [...list, { id, name: req.name, folder: req.folder, color: req.color ?? "ansi6", icon: null }]);
+      return { id };
+    }
+    case "root.remove": {
+      if (!find(req.id)) throw new Error(`no workspace ${req.id}`);
+      if (list.length === 1) throw new Error("the last workspace cannot be removed");
+      setShared("roots", list.filter((r) => r.id !== req.id));
+      const rootOf = { ...(shared("space.root") ?? {}) };
+      for (const [s, r] of Object.entries(rootOf)) if (r === req.id) delete rootOf[s];
+      setShared("space.root", rootOf);
+      return { id: req.id };
+    }
+    case "root.update": {
+      if (!find(req.id)) throw new Error(`no workspace ${req.id}`);
+      const patch = Object.fromEntries(["name", "folder", "color"].filter((k) => req[k] != null).map((k) => [k, req[k]]));
+      setShared("roots", list.map((r) => (r.id === req.id ? { ...r, ...patch } : r)));
+      return { id: req.id };
+    }
+    case "space.root": {
+      if (!find(req.root)) throw new Error(`no workspace ${req.root}`);
+      setShared("space.root", { ...(shared("space.root") ?? {}), [req.space]: req.root });
+      return { space: req.space, root: req.root };
+    }
+    case "space.lock": {
+      const locked = { ...(shared("space.locked") ?? {}) };
+      if (req.on) locked[req.space] = true; else delete locked[req.space];
+      setShared("space.locked", locked);
+      return { space: req.space, locked: Boolean(req.on) };
+    }
+    default: throw new Error(`unknown op ${req.op}`);
+  }
+}
+
+async function hxHandle(path) {
+  const m = path.replace(/\\/g, "/").match(/\/req-([A-Za-z0-9_-]+)\.json$/);
+  if (!m) return;
+  // The watch also reports the request's deletion (hx removes it once answered): no file, no work.
+  const text = await readTextFile(path).catch(() => null);
+  if (!text) return;
+  const res = `${HX_DIR()}/res-${m[1]}.json`;
+  const claim = JSON.stringify({ claimed: Date.now() });
+  try { await writeTextFile(res, claim, null); } catch { return; } // answered or claimed already
+  let answer;
+  try { answer = { ok: true, result: hxApply(JSON.parse(text)) }; }
+  catch (e) { answer = { ok: false, error: String(e.message ?? e) }; }
+  await writeTextFile(res, JSON.stringify(answer), claim).catch(() => null);
+}
+
 export default class RootTabs extends View {
+  init(_props, cx) {
+    // Until hx first makes data/hx, the watch rejects: try again a little later.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        let paths = null;
+        try { paths = await watchFolder(HX_DIR()); } catch { await cx.sleep(HX_RETRY_MS); }
+        for (const p of paths ?? []) await hxHandle(p);
+      }
+    });
+  }
+
   tab(root, t, rootOf, active) {
     const fill = root.color?.startsWith("#") ? root.color : (MARK[root.color] ?? t[root.color] ?? MARK.ansi6);
     const mine = spaces().filter((s) => rootOf[s.id] === root.id);

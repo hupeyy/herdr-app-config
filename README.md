@@ -80,6 +80,22 @@ shell pane with a `claude.session` label as Claude. `space-panel` also reads eac
 transcript (`space-panel/scan-work.mjs`) for the tickets it created or was handed and the PRs it
 opened or reviewed. The card's Jira and GitHub buttons open all of them.
 
+## hx: herdr for agents
+
+`hx/hx.mjs` lets an agent (or you) drive herdr-app by name: list, make, rename, move and close
+workspaces, dev workspaces and tabs, and talk to the agents in them (`send`, `ask`, `read`,
+`wait`). It wraps `herdr-app do` and `hc`. Workspaces live in mod shared state, which only a mod
+can write, so those changes go through a small bridge in `space-tabs` (request and answer files in
+`data/hx`). `hx help` lists every command. New spaces open in the background, and closing refuses
+a locked space, the caller's own space and working agents unless `--force`.
+
+Put it on PATH (Git Bash and cmd/PowerShell):
+
+```sh
+printf '#!/bin/sh\nexec node "$HOME/.config/herdr-app/hx/hx.mjs" "$@"\n' > ~/.local/bin/hx && chmod +x ~/.local/bin/hx
+printf '@node "%%USERPROFILE%%\\.config\\herdr-app\\hx\\hx.mjs" %%*\r\n' > ~/.local/bin/hx.cmd
+```
+
 ## Pokémon
 
 Each dev workspace card shows a Poké Ball and its own Pokémon, after
