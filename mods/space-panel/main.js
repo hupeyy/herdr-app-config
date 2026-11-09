@@ -34,6 +34,13 @@ const FALLBACK_SOUND = "sounds/windows-notify.mp3"; // for a Pokémon with no cr
 const POKEMON_BATCH = 150; // files per curl call, under herdr's 30 s exec limit
 
 // Saved picks first; a new dev workspace gets a random Pokémon that no other one has.
+// The New dev workspace dialog's pick for a space space.new just made (space-tabs saves it too);
+// taking it here keeps the card from showing a random one first.
+function pendingPick(id, key) {
+  const pending = shared("space.pending");
+  return pending?.[key] && !pending.before?.includes(id) ? pending[key] : null;
+}
+
 function pokemonFor(ids) {
   const saved = shared(POKEMON) ?? {};
   const fresh = {};
@@ -41,7 +48,7 @@ function pokemonFor(ids) {
   for (const id of ids) {
     if (saved[id]) continue;
     const free = NAMES.map((_, i) => i + 1).filter((n) => !used.has(n));
-    const n = free.length ? free[Math.floor(Math.random() * free.length)] : Math.floor(Math.random() * POKEMON_COUNT) + 1;
+    const n = pendingPick(id, "pokemon") ?? (free.length ? free[Math.floor(Math.random() * free.length)] : Math.floor(Math.random() * POKEMON_COUNT) + 1);
     fresh[id] = n;
     used.add(n);
   }
@@ -120,7 +127,7 @@ function ballsFor(ids) {
     if (BALLS.includes(saved[id])) continue;
     const free = BALLS.filter((d) => !used.has(d));
     const pool = free.length ? free : BALLS;
-    fresh[id] = pool[Math.floor(Math.random() * pool.length)];
+    fresh[id] = pendingPick(id, "ball") ?? pool[Math.floor(Math.random() * pool.length)];
     used.add(fresh[id]);
   }
   if (Object.keys(fresh).length) setShared(BALL_PICK, { ...saved, ...fresh });

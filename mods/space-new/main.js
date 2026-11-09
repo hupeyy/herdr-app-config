@@ -79,18 +79,16 @@ export default class WorkspaceDialog extends View {
       this.icon = (shared("space.icons") ?? {})[this.space.id] ?? null;
       this.pokemon = (shared(POKEMON) ?? {})[this.space.id] ?? null;
       this.ball = (shared(BALL_PICK) ?? {})[this.space.id] ?? "classic";
-      this.pokeSearch = InputState.new({ placeholder: "Search by name or number" });
-      this.pokeSearch.on("change", (_e, cx) => cx.notify());
-      // The picker shows SpriteCollab portraits once every one is on disk (portraits.mjs); until
-      // then, the menu icons.
-      this.portraits = false;
-      cx.spawn(async (cx) => {
-        if (!(await readTextFile(`${appHome()}/${PORTRAIT_DIR}/ready`).catch(() => null))) {
-          await exec("node", [`${appHome()}/mods/space-new/portraits.mjs`]).catch(() => null);
-        }
-        this.portraits = Boolean(await readTextFile(`${appHome()}/${PORTRAIT_DIR}/ready`).catch(() => null));
-        cx.notify();
-      });
+      this.initPicker(cx);
+    }
+    // A new dev workspace starts with a Pokémon and a ball no other space has, as space-panel would pick.
+    if (this.mode === "newDev") {
+      this.pokemon = this.freePokemon();
+      const usedBalls = new Set(Object.values(shared(BALL_PICK) ?? {}));
+      const freeBalls = BALLS.filter((d) => !usedBalls.has(d));
+      const pool = freeBalls.length ? freeBalls : BALLS;
+      this.ball = pool[Math.floor(Math.random() * pool.length)];
+      this.initPicker(cx);
     }
     this.start = null; // null: a shell; else an agent from knownAgents()
     this.agents = [];
@@ -106,6 +104,28 @@ export default class WorkspaceDialog extends View {
       } catch {}
       cx.notify();
     });
+  }
+
+  // The Pokémon picker's search, and its SpriteCollab portraits once every one is on disk
+  // (portraits.mjs); until then, the menu icons.
+  initPicker(cx) {
+    this.pokeSearch = InputState.new({ placeholder: "Search by name or number" });
+    this.pokeSearch.on("change", (_e, cx) => cx.notify());
+    this.portraits = false;
+    cx.spawn(async (cx) => {
+      if (!(await readTextFile(`${appHome()}/${PORTRAIT_DIR}/ready`).catch(() => null))) {
+        await exec("node", [`${appHome()}/mods/space-new/portraits.mjs`]).catch(() => null);
+      }
+      this.portraits = Boolean(await readTextFile(`${appHome()}/${PORTRAIT_DIR}/ready`).catch(() => null));
+      cx.notify();
+    });
+  }
+
+  // A Pokémon no other dev workspace has (and not the current pick).
+  freePokemon() {
+    const taken = new Set(Object.entries(shared(POKEMON) ?? {}).filter(([id]) => id !== this.space?.id).map(([, n]) => n));
+    const free = NAMES.map((_, i) => i + 1).filter((n) => !taken.has(n) && n !== this.pokemon);
+    return free[Math.floor(Math.random() * free.length)] ?? this.pokemon ?? 1;
   }
 
   close() {
@@ -125,8 +145,10 @@ export default class WorkspaceDialog extends View {
     return probe.code === 0;
   }
 
+  // space-tabs gives the first new space these picks (space.new cannot say which id it will make).
   newSpace(args, root) {
-    setShared("space.pending", { before: spaces().map((s) => s.id), color: this.color, icon: this.icon, root, at: Date.now() });
+    const picks = this.mode === "newDev" ? { pokemon: this.pokemon, ball: this.ball } : {};
+    setShared("space.pending", { before: spaces().map((s) => s.id), color: this.color, icon: this.icon, root, ...picks, at: Date.now() });
     run("space.new", args);
   }
 
@@ -178,19 +200,17 @@ export default class WorkspaceDialog extends View {
       const b = iconBox(n, height);
       return image(POKEMON_ICON(n)).w(b.w).h(b.h);
     };
-    const random = () => {
-      const taken = new Set(Object.entries(shared(POKEMON) ?? {}).filter(([id]) => id !== this.space?.id).map(([, n]) => n));
-      const free = NAMES.map((_, i) => i + 1).filter((n) => !taken.has(n) && n !== this.pokemon);
-      this.pokemon = free[Math.floor(Math.random() * free.length)] ?? this.pokemon;
-    };
+    const random = () => { this.pokemon = this.freePokemon(); };
     return v_flex().gap(8)
       .child(h_flex().gap(10).items_center()
         .when(Boolean(this.pokemon), (el) => el.child(icon(this.pokemon, 30)))
         .child(div().flex_1().text_color(t.foreground).child(this.pokemon ? `${dexNo(this.pokemon)} ${nameOf(this.pokemon)}` : "None yet"))
         .child(this.chip(t, "poke-random", "Random", false, random)))
       .child(h_flex().child(this.field(t, this.pokeSearch)))
-      .child(div().id("poke-grid").h(this.portraits ? 230 : 180).overflow_y_scrollbar().rounded(7).border_1().border_color(t.border).p(4)
-        .child(h_flex().flex_wrap().gap(2)
+      // The grid scrolls on its own: the wrapper stops the wheel there, so the dialog behind it stays put.
+      .child(div().id("poke-grid-wheel").on_scroll_wheel((_e, cx) => cx.stop_propagation())
+        .child(div().id("poke-grid").h(this.portraits ? 230 : 180).overflow_y_scrollbar().rounded(7).border_1().border_color(t.border).p(4)
+        .child(h_flex().flex_none().flex_wrap().gap(2)
           .children(shown.map((x) => div().id(`poke-${x.id}`).w(this.portraits ? 48 : 46).h(this.portraits ? 48 : 36).flex().items_center().justify_center().rounded(6)
             .cursor_pointer().tooltip(`${dexNo(x.id)} ${x.label}`)
             .when(x.id === this.pokemon, (el) => el.bg(t.selected).border_1().border_color(t.accent))
@@ -198,7 +218,7 @@ export default class WorkspaceDialog extends View {
             .on_click((_e, cx) => { this.pokemon = x.id; cx.notify(); })
             .child(icon(x.id, 30)))))
         .when(matches.length > shown.length, (el) => el.child(div().pt(4).text_size(11).text_color(t.dim)
-          .child(`Showing ${shown.length} of ${matches.length}: search to find the rest.`))));
+          .child(`Showing ${shown.length} of ${matches.length}: search to find the rest.`)))));
   }
 
   // Edit mode: the dev workspace's Poké Ball, from every design's still frame (drawn 2x).
@@ -258,6 +278,8 @@ export default class WorkspaceDialog extends View {
     const titles = { newRoot: "New workspace", editRoot: "Edit workspace", newDev: `New dev workspace in ${this.root?.name ?? "this workspace"}`, edit: "Edit dev workspace" };
     const showFolder = this.mode !== "edit";
     const showStart = this.mode === "newDev";
+    // A dev workspace (new or edited) picks a Poké Ball and a Pokémon; a workspace (root) a color.
+    const picks = this.mode === "edit" || this.mode === "newDev";
     const tile = (size, icon) => h_flex().size(size).flex_none().rounded(Math.round(size / 3.6)).bg(fill).items_center().justify_center()
       .text_size(size * 0.55).font_bold().text_color("#ffffff")
       .child(icon ? svg(ICON(icon)).size(size * 0.6).text_color("#ffffff") : ([...label][0]?.toUpperCase() ?? "?"));
@@ -271,7 +293,7 @@ export default class WorkspaceDialog extends View {
         if (e.key === "escape") { this.close(); cx.stop_propagation(); }
       })
       .child(h_flex().px(20).pt(18).pb(12).gap(12).items_center().flex_none().border_b(1).border_color(t.border)
-        .child(this.mode === "edit" ? ballImage(this.ball).accessibility_label(ballLabel(this.ball)) : tile(34, this.icon))
+        .child(picks ? ballImage(this.ball).accessibility_label(ballLabel(this.ball)) : tile(34, this.icon))
         .child(v_flex().flex_1().min_w(0)
           .child(div().text_size(15).font_semibold().text_color(t.foreground).child(titles[this.mode]))
           .child(div().truncate().text_size(12).text_color(t.dim).child(label)))
@@ -282,8 +304,8 @@ export default class WorkspaceDialog extends View {
           .child(h_flex().gap(8).child(this.field(t, this.folder)).child(button("browse", "Browse…", (cx) => this.browse(cx), false)))
           .when(this.recent.length > 0, (el) => el.child(h_flex().gap(6).flex_wrap().children(this.recent.map((f, i) =>
             this.chip(t, `recent-${i}`, basename(f), this.folder.value().trim() === f, () => { this.folder.set_value(f); this.error = ""; }).tooltip(f))))))))
-        .when(this.mode === "edit", (el) => el.child(this.section(t, "Poké Ball", this.ballSection(t))))
-        .when(this.mode !== "edit", (el) => el.child(this.section(t, "Color", h_flex().gap(8).children(Object.entries(MARK).map(([key, hex]) =>
+        .when(picks, (el) => el.child(this.section(t, "Poké Ball", this.ballSection(t))))
+        .when(!picks, (el) => el.child(this.section(t, "Color", h_flex().gap(8).children(Object.entries(MARK).map(([key, hex]) =>
           div().id(`color-${key}`).size(26).rounded(13).bg(hex).cursor_pointer()
             .border_2().border_color(this.color === key ? t.foreground : t.popover)
             .on_click((_e, cx) => { this.color = key; cx.notify(); })))))
@@ -294,7 +316,7 @@ export default class WorkspaceDialog extends View {
             .text_color(this.icon === name ? t.foreground : t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(name)
             .on_click((_e, cx) => { this.icon = name; cx.notify(); })
             .child(svg(ICON(name)).size(15)))))))
-        .when(this.mode === "edit" && Boolean(this.pokeSearch), (el) => el.child(this.section(t, "Pokémon", v_flex().gap(10)
+        .when(picks && Boolean(this.pokeSearch), (el) => el.child(this.section(t, "Pokémon", v_flex().gap(10)
           .child(this.pokemonSection(t)).child(this.spriteUpdate(t, button)))))
         .when(showStart, (el) => el.child(this.section(t, "Start with", v_flex().gap(8)
           .child(h_flex().gap(6).flex_wrap()

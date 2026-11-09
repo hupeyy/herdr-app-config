@@ -57,6 +57,9 @@ function applyPending() {
     if (pending.color) setShared("space.colors", { ...(shared("space.colors") ?? {}), [fresh.id]: pending.color });
     if (pending.icon) setShared("space.icons", { ...(shared("space.icons") ?? {}), [fresh.id]: pending.icon });
     if (pending.root) setShared("space.root", { ...(shared("space.root") ?? {}), [fresh.id]: pending.root });
+    // The New dev workspace dialog's Pokémon and Poké Ball (space-panel's shared keys).
+    if (pending.pokemon) setShared("space.pokemon", { ...(shared("space.pokemon") ?? {}), [fresh.id]: pending.pokemon });
+    if (pending.ball) setShared("space.balls", { ...(shared("space.balls") ?? {}), [fresh.id]: pending.ball });
   }
   setShared("space.pending", null);
 }
