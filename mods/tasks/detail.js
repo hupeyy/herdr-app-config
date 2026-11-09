@@ -175,7 +175,7 @@ function closeX(view, t) {
 
 const CHECK = {
   SUCCESS: ["✓", "Successful", "done"], NEUTRAL: ["○", "Neutral", "dim"], SKIPPED: ["○", "Skipped", "dim"],
-  FAILURE: ["✗", "Failed", "blocked"], ERROR: ["✗", "Error", "blocked"], CANCELLED: ["✗", "Cancelled", "blocked"],
+  FAILURE: ["✗", "Failed", "blocked"], ERROR: ["✗", "Error", "blocked"], CANCELLED: ["⊘", "Cancelled", "dim"],
   TIMED_OUT: ["✗", "Timed out", "blocked"], ACTION_REQUIRED: ["!", "Action required", "blocked"],
   PENDING: ["●", "Running", "working"], IN_PROGRESS: ["●", "Running", "working"], QUEUED: ["●", "Queued", "working"],
 };
@@ -242,17 +242,26 @@ export function prPage(view, t, cx, url) {
 
 function checkRow(t, c, i, bg) {
   const [glyph, word, tone] = CHECK[c.state] ?? ["●", c.state, "dim"];
+  // A cancelled check is plain dim grey: ink() would lighten it toward the foreground.
+  const cancelled = c.state === "CANCELLED";
+  const color = cancelled ? t.dim : ink(t, tone, bg);
   return h_flex().id(`chk-${i}`).px(12).h(34).gap(10).items_center().border_b(1).border_color(t.border)
     .when(Boolean(c.url), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => cx.open_url(c.url)))
-    .child(div().w(14).text_color(ink(t, tone, bg)).child(glyph))
-    .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(c.name))
-    .child(div().text_size(11.5).text_color(ink(t, tone, bg)).child(word));
+    .child(div().w(14).text_color(color).child(glyph))
+    .child(div().flex_1().min_w(0).truncate().text_color(cancelled ? t.dim : t.foreground).child(c.name))
+    .child(div().text_size(11.5).text_color(color).child(word));
 }
 
+// A cancelled check is neither failing nor running (usually a newer run superseded it): it is
+// counted on its own and does not turn the line red.
 function summaryLine(t, checks, passing, failing, bg) {
-  const tone = failing ? "blocked" : passing === checks.length ? "done" : "working";
-  const text = !checks.length ? "No checks" : failing ? `${failing} failing, ${passing} passing` : passing === checks.length ? "All checks passing" : `${checks.length - passing} running, ${passing} passing`;
-  return div().font_medium().text_color(checks.length ? ink(t, tone, bg) : t.dim).child(text);
+  const cancelled = checks.filter((c) => c.state === "CANCELLED").length;
+  const running = checks.length - passing - failing - cancelled;
+  const tone = failing ? "blocked" : running ? "working" : "done";
+  const parts = [failing && `${failing} failing`, running && `${running} running`, `${passing} passing`].filter(Boolean);
+  const text = !checks.length ? "No checks" : !failing && !running && !cancelled ? "All checks passing" : parts.join(", ");
+  return h_flex().font_medium().text_color(checks.length ? ink(t, tone, bg) : t.dim).child(text)
+    .when(cancelled > 0, (el) => el.child(div().text_color(t.dim).child(`, ${cancelled} cancelled`)));
 }
 
 function checksTab(t, checks, passing, failing) {
