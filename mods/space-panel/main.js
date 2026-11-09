@@ -609,8 +609,10 @@ export default class DevWorkspaces extends View {
       : drawn ? ball(STILL_CELL)
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
         .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color("#ffffff")));
-    // Collapsed, the card shows its most urgent agent (newest first among equals).
-    const latest = rows.filter((r) => r.status)
+    // Collapsed, the card shows its most urgent top-level agent (newest first among equals), never a
+    // sub-agent: those rows are "agent-" (Agent tool) and "sub-" (child terminals). The mark still
+    // rolls the sub-agents in, so a working child keeps the card in progress.
+    const latest = rows.filter((r) => r.status && !/^(agent|sub)-/.test(r.id))
       .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || (b.at ?? 0) - (a.at ?? 0))[0];
     const menuHeight = 44 + 30 * (this.agentChoices.length + (space.active ? 3 : 2));
     const dropping = this.moved && Boolean(this.drag) && this.dropTarget === space.id && this.drag.space !== space.id;
