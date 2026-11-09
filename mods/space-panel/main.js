@@ -26,6 +26,10 @@ const CARD_ART = 96; // the hover card's sprite box (pokemonButton)
 // A card's status from its rows: anything working keeps the dev workspace in progress.
 const STATUS_RANK = { blocked: 0, working: 1, done: 2, idle: 3 };
 const rollupStatus = (statuses) => statuses.filter((s) => s in STATUS_RANK).sort((a, b) => STATUS_RANK[a] - STATUS_RANK[b])[0] ?? null;
+// The Edit dialog's Update sprites (space-new) and its progress (loadSprites).
+const SPRITE_REFRESH = "sprites.refresh";
+const SPRITE_PROGRESS = "sprites.progress";
+const SPRITE_RETRY_MS = 5 * 60 * 1000; // after a sprite download failed on the network (loadSprites)
 const FALLBACK_SOUND = "sounds/windows-notify.mp3"; // for a Pokémon with no cry (watchCries)
 const POKEMON_BATCH = 150; // files per curl call, under herdr's 30 s exec limit
 
@@ -682,19 +686,36 @@ export default class DevWorkspaces extends View {
   }
 
   // Builds the animated sprite of each Pokémon on a card (pokemon-sprites.js), once, one at a time.
+  // Map values: the sprite's meta, { none, at } (no sprite anywhere), { retryAt } (network failure), "pending".
   loadSprites(cx) {
+    // Update sprites (space-new's Edit dialog) sets shared SPRITE_REFRESH: anything older is fetched again.
+    const since = shared(SPRITE_REFRESH) ?? 0;
+    const inUse = [...new Set(Object.values(this.pokemon ?? {}))];
+    this.publishSpriteProgress(inUse, since);
     if (this.loadingSprite) return;
     // Sprites from an older recipe (pokemon-sprites.js's VERSION) are rebuilt too.
-    const stale = (s) => s === undefined || (s?.version && s.version !== SPRITE_VERSION);
-    const n = [...new Set(Object.values(this.pokemon ?? {}))].find((d) => stale(this.sprites.get(d)));
+    // A load that failed on the network ({ retryAt }) is tried again after SPRITE_RETRY_MS.
+    const stale = (s) => s === undefined || (s?.version && s.version !== SPRITE_VERSION) || (s?.retryAt && Date.now() > s.retryAt)
+      || ((s?.version || s?.none) && (s.built ?? s.at ?? 0) < since);
+    const n = inUse.find((d) => stale(this.sprites.get(d)));
     if (!n) return;
     this.loadingSprite = true;
     this.sprites.set(n, "pending");
     cx.spawn(async (cx) => {
-      this.sprites.set(n, await loadSprite(n).catch(() => null));
+      const got = await loadSprite(n, since).catch(() => ({ retryAt: Date.now() + SPRITE_RETRY_MS }));
+      this.sprites.set(n, got ?? { none: true, at: Date.now() });
       this.loadingSprite = false;
       cx.notify();
     });
+  }
+
+  // How far an Update sprites run is, for the Edit dialog: shared SPRITE_PROGRESS { since, done, total }.
+  publishSpriteProgress(inUse, since) {
+    if (!since) return;
+    const settled = (s) => s?.retryAt || ((s?.version || s?.none) && (s.built ?? s.at ?? 0) >= since);
+    const next = { since, total: inUse.length, done: inUse.filter((d) => settled(this.sprites.get(d))).length,
+      failed: inUse.filter((d) => this.sprites.get(d)?.retryAt).length };
+    if (JSON.stringify(next) !== JSON.stringify(shared(SPRITE_PROGRESS) ?? {})) setShared(SPRITE_PROGRESS, next);
   }
 
   // Draws the balls' frames one design at a time: those on cards first, then the rest, whose

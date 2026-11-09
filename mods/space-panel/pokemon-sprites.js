@@ -3,24 +3,22 @@
 // animation (or Walk, which it copies when there is no Idle), the row facing down-right, scaled 2x
 // with nearest neighbour (1x for big Pokémon), cut into a looping GIF with ImageMagick. Added
 // here: the GIF is cropped to the box its pixels fill, so it fits the card; an Idle without a
-// Walk counts, and 4 Pokémon use a form's sprite (FORMS). SpriteCollab has none for 38: those take
+// Walk counts, and 4 Pokémon use a form's sprite (FORMS). SpriteCollab has none for 38 (its
+// tracker.json): only when it answers 404 does a Pokémon fall back. Those take
 // Pokémon Showdown's gen5ani GIF, or, for the 18 gen5ani lacks too, a Black/White-style GIF made
-// from the 2D still (tools/gen5-style, in data/.../gen5gen). Arcanine, Rillaboom and Iron Thorns, whose Idle is
-// one frame, take an idle made from a relative's motion (data/.../idlegen).
+// from the 2D still (tools/gen5-style, in data/.../gen5gen). A Pokémon with no Idle, or a one-frame
+// Idle (Arcanine, Rillaboom, Iron Thorns), takes its SpriteCollab Walk.
 import { exec, appHome, readTextFile, writeTextFile } from "herdr";
 import { nameOf } from "./pokemon-names.js";
 
 const ICONS_REL = "data/pokemon-icons";
 export const SPRITES_REL = `${ICONS_REL}/agents`;
 const GENERATED_REL = `${ICONS_REL}/gen5gen`;
-// Hand-picked idles made from a relative's motion, for Pokémon whose SpriteCollab Idle is one frame.
-const IDLEGEN_REL = `${ICONS_REL}/idlegen`;
-const IDLEGEN = new Set([59, 812, 995]);
 const PMD = "https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite";
 const GEN5ANI = "https://play.pokemonshowdown.com/sprites/gen5ani";
 // Bump when the recipe changes, so cached sprites are rebuilt. The GIF's name carries it: herdr
 // keeps a decoded image by path, so a GIF rewritten in place stays frozen on the old copy.
-export const VERSION = 3;
+export const VERSION = 5; // 4: network failures had been saved as fallbacks; 5: Walk for a one-frame Idle
 // PMD sheet rows by facing: 0 down, 1 down-right, ... The card stands it toward its title.
 const IDLE_ROW = 1;
 // Pokémon whose only SpriteCollab sprite is a form's: its folder (shiny groups skipped).
@@ -49,11 +47,17 @@ async function im(args) {
   return r.stdout.trim();
 }
 
-async function curl(pairs, agent) {
-  const args = ["-sfL", "--retry", "2", "--connect-timeout", "10", "--create-dirs"];
+// Downloads one file; returns true when it came, false on a 404 (the source has none). Any other
+// failure (offline, a timeout, 5xx, 429) throws, so nothing is saved and the next load tries again.
+// Saving it as a miss once left Meowth, Kingdra and Chatot on Showdown sprites.
+async function fetchFile(file, url, agent) {
+  const args = ["-sL", "--retry", "4", "--retry-all-errors", "--retry-delay", "1", "--connect-timeout", "10", "--max-time", "60", "--create-dirs", "-o", file, "-w", "%{http_code}"];
   if (agent) args.push("-A", "herdr-app");
-  for (const [file, url] of pairs) args.push("-o", file, url);
-  return (await exec("curl", args).catch(() => null))?.code === 0;
+  const r = await exec("curl", [...args, url]).catch(() => null);
+  const status = Number(r?.stdout?.trim() ?? 0);
+  if (status === 200) return true;
+  if (status === 404) return false;
+  throw new Error(`${url}: ${status || "no answer"}`);
 }
 
 function parseAnims(xml) {
@@ -105,41 +109,42 @@ async function gifSize(file) {
   return { w, h };
 }
 
-// Builds (once) and returns { path, w, h, source } for a Pokémon, or null (the still icon stays).
+// Builds (once) and returns { path, w, h, source, built } for a Pokémon, or null (the still icon
+// stays). Throws on a network failure: the caller tries again later. A sprite built before `since`
+// (the Edit dialog's Update sprites) is fetched again, so new and revised SpriteCollab sprites
+// arrive. Each build gets its own GIF name: herdr keeps a decoded image by path.
 // meta.json is written last and marks it done.
-export async function loadSprite(id) {
+export async function loadSprite(id, since = 0) {
   const rel = `${SPRITES_REL}/${pad(id)}`;
   const dir = `${appHome()}/${rel}`;
   const metaFile = `${dir}/meta.json`;
   const old = await readTextFile(metaFile).catch(() => null);
   try {
     const meta = JSON.parse(old);
-    if (meta.version === VERSION) return meta;
+    if (meta.version === VERSION && (meta.built ?? 0) >= since && (meta.row ?? IDLE_ROW) === IDLE_ROW) return meta;
   } catch {}
   let meta = null;
-  if (IDLEGEN.has(id)) {
-    const size = await gifSize(`${appHome()}/${IDLEGEN_REL}/${id}.gif`).catch(() => null);
-    if (size) meta = { path: `${IDLEGEN_REL}/${id}.gif`, ...size, source: "idlegen" };
-    // No download made the sprite's folder, and meta.json goes there.
-    await exec("powershell", ["-NoProfile", "-Command", `New-Item -ItemType Directory -Force -Path '${dir}' | Out-Null`]).catch(() => null);
-  }
+  const built = Date.now();
+  const gif = `idle-${VERSION}-${built.toString(36)}.gif`;
   const base = `${PMD}/${FORMS[id] ?? pad(id)}`;
-  if (!meta && await curl([[`${dir}/AnimData.xml`, `${base}/AnimData.xml`]])) {
+  if (await fetchFile(`${dir}/AnimData.xml`, `${base}/AnimData.xml`)) {
     const anims = parseAnims(await readTextFile(`${dir}/AnimData.xml`).catch(() => ""));
     const walk = resolve(anims, "Walk");
-    // Unlike herdr-pokemon-agents, an Idle alone is enough (the card never walks).
-    const idle = resolve(anims, "Idle") ?? walk;
+    // The Idle, unless it is missing or one still frame: then the Walk. An Idle alone is enough
+    // (unlike herdr-pokemon-agents: the card never walks).
+    const still = resolve(anims, "Idle");
+    const idle = still && (still.durations.length > 1 || !walk) ? still : walk;
     if (idle) {
-      if (await curl([[`${dir}/${idle.name}.png`, `${base}/${idle.name}-Anim.png`]])) {
+      if (await fetchFile(`${dir}/${idle.name}.png`, `${base}/${idle.name}-Anim.png`)) {
         // Big Pokémon (Onix, Gyarados...) have big frames: draw those at 1x.
         const scale = (walk ?? idle).fh > 64 ? 1 : 2;
-        const size = await cut(`${dir}/${idle.name}.png`, idle, IDLE_ROW, scale, `${dir}/idle-${VERSION}.gif`);
-        meta = { path: `${rel}/idle-${VERSION}.gif`, ...size, source: "SpriteCollab" };
+        const size = await cut(`${dir}/${idle.name}.png`, idle, IDLE_ROW, scale, `${dir}/${gif}`);
+        meta = { path: `${rel}/${gif}`, ...size, source: "SpriteCollab", row: IDLE_ROW };
       }
     }
   }
-  if (!meta && await curl([[`${dir}/idle-${VERSION}.gif`, `${GEN5ANI}/${showdownId(nameOf(id))}.gif`]], true)) {
-    meta = { path: `${rel}/idle-${VERSION}.gif`, ...(await gifSize(`${dir}/idle-${VERSION}.gif`)), source: "gen5ani" };
+  if (!meta && await fetchFile(`${dir}/${gif}`, `${GEN5ANI}/${showdownId(nameOf(id))}.gif`, true)) {
+    meta = { path: `${rel}/${gif}`, ...(await gifSize(`${dir}/${gif}`)), source: "gen5ani" };
   }
   if (!meta) {
     const file = `${appHome()}/${GENERATED_REL}/${id}.gif`;
@@ -147,8 +152,12 @@ export async function loadSprite(id) {
     if (size) meta = { path: `${GENERATED_REL}/${id}.gif`, ...size, source: "generated" };
   }
   if (!meta) return null;
-  meta = { version: VERSION, id, ...meta };
+  meta = { version: VERSION, id, built, ...meta };
   // writeTextFile replaces a file only when told its current text (null creates a new one).
   await writeTextFile(metaFile, JSON.stringify(meta), old);
+  // Older builds of this Pokémon (earlier recipes and refreshes): every idle GIF but the new one.
+  const keep = meta.path.startsWith(`${rel}/`) ? meta.path.slice(rel.length + 1) : "";
+  await exec("powershell", ["-NoProfile", "-Command",
+    `Get-ChildItem -LiteralPath '${dir}' -Filter 'idle-*.gif' | Where-Object Name -ne '${keep}' | Remove-Item -ErrorAction SilentlyContinue`]).catch(() => null);
   return meta;
 }
