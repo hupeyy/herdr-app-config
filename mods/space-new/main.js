@@ -22,17 +22,21 @@ const roots = () => shared("roots") ?? [];
 // A dev workspace's Pokémon (space-panel draws it; icons downloaded there on first use).
 const POKEMON = "space.pokemon";
 const POKEMON_ICON = (n) => `data/pokemon-icons/${n}.png`;
+// SpriteCollab Normal portraits (portraits.mjs), 40x40.
+const PORTRAIT_DIR = "data/pokemon-portraits";
+const PORTRAIT = (n) => `${PORTRAIT_DIR}/${n}.png`;
+const PORTRAIT_PX = 40;
 const POKE_SHOWN = 240;
 // A dev workspace's Poké Ball. space-panel picks one at random and draws every design's frames;
 // BALL_VERSION and BALLS must match its own.
 const BALL_PICK = "space.balls";
+// Update sprites: the refresh time this sets and the progress space-panel reports (its loadSprites).
+const SPRITE_REFRESH = "sprites.refresh";
+const SPRITE_PROGRESS = "sprites.progress";
 const BALL_VERSION = "23";
 // #2 is left out: it is the classic ball again.
 const BALLS = ["classic", ...Array.from({ length: 26 }, (_, i) => `d${String(i + 1).padStart(2, "0")}`).filter((d) => d !== "d02")];
 // The closed ball at 3x (pokeball-anim.ps1's pick.png), shown at its own size so it stays sharp:
-// Update sprites: the refresh time this sets and the progress space-panel reports (its loadSprites).
-const SPRITE_REFRESH = "sprites.refresh";
-const SPRITE_PROGRESS = "sprites.progress";
 // 36 px for the classic 12-pixel ball, 30 for the 10-pixel designs.
 const BALL_PICK_IMG = (d) => `data/pokemon-icons/pokeball-v${BALL_VERSION}-${d}-pick.png`;
 const ballImage = (d) => { const px = d === "classic" ? 36 : 30; return image(BALL_PICK_IMG(d)).w(px).h(px); };
@@ -77,6 +81,16 @@ export default class WorkspaceDialog extends View {
       this.ball = (shared(BALL_PICK) ?? {})[this.space.id] ?? "classic";
       this.pokeSearch = InputState.new({ placeholder: "Search by name or number" });
       this.pokeSearch.on("change", (_e, cx) => cx.notify());
+      // The picker shows SpriteCollab portraits once every one is on disk (portraits.mjs); until
+      // then, the menu icons.
+      this.portraits = false;
+      cx.spawn(async (cx) => {
+        if (!(await readTextFile(`${appHome()}/${PORTRAIT_DIR}/ready`).catch(() => null))) {
+          await exec("node", [`${appHome()}/mods/space-new/portraits.mjs`]).catch(() => null);
+        }
+        this.portraits = Boolean(await readTextFile(`${appHome()}/${PORTRAIT_DIR}/ready`).catch(() => null));
+        cx.notify();
+      });
     }
     this.start = null; // null: a shell; else an agent from knownAgents()
     this.agents = [];
@@ -158,7 +172,12 @@ export default class WorkspaceDialog extends View {
     const matches = NAMES.map((label, i) => ({ id: i + 1, label }))
       .filter((x) => !q || x.label.toLowerCase().includes(q) || String(x.id) === q.replace(/^#?0*/, ""));
     const shown = matches.slice(0, POKE_SHOWN);
-    const icon = (n, height) => { const b = iconBox(n, height); return image(POKEMON_ICON(n)).w(b.w).h(b.h); };
+    // A portrait at its own 40 px (scaling pixel art blurs it), else the menu icon.
+    const icon = (n, height) => {
+      if (this.portraits) return image(PORTRAIT(n)).w(PORTRAIT_PX).h(PORTRAIT_PX).rounded(4);
+      const b = iconBox(n, height);
+      return image(POKEMON_ICON(n)).w(b.w).h(b.h);
+    };
     const random = () => {
       const taken = new Set(Object.entries(shared(POKEMON) ?? {}).filter(([id]) => id !== this.space?.id).map(([, n]) => n));
       const free = NAMES.map((_, i) => i + 1).filter((n) => !taken.has(n) && n !== this.pokemon);
@@ -170,9 +189,9 @@ export default class WorkspaceDialog extends View {
         .child(div().flex_1().text_color(t.foreground).child(this.pokemon ? `${dexNo(this.pokemon)} ${nameOf(this.pokemon)}` : "None yet"))
         .child(this.chip(t, "poke-random", "Random", false, random)))
       .child(h_flex().child(this.field(t, this.pokeSearch)))
-      .child(div().id("poke-grid").h(180).overflow_y_scrollbar().rounded(7).border_1().border_color(t.border).p(4)
+      .child(div().id("poke-grid").h(this.portraits ? 230 : 180).overflow_y_scrollbar().rounded(7).border_1().border_color(t.border).p(4)
         .child(h_flex().flex_wrap().gap(2)
-          .children(shown.map((x) => div().id(`poke-${x.id}`).w(46).h(36).flex().items_center().justify_center().rounded(6)
+          .children(shown.map((x) => div().id(`poke-${x.id}`).w(this.portraits ? 48 : 46).h(this.portraits ? 48 : 36).flex().items_center().justify_center().rounded(6)
             .cursor_pointer().tooltip(`${dexNo(x.id)} ${x.label}`)
             .when(x.id === this.pokemon, (el) => el.bg(t.selected).border_1().border_color(t.accent))
             .hover((s) => s.bg(t.hover))
@@ -194,6 +213,24 @@ export default class WorkspaceDialog extends View {
       .child(ballImage(d))));
   }
 
+  // Update sprites: space-panel fetches every card's sprite again from SpriteCollab (new and
+  // revised sprites; a gap that has since been drawn), and reports back in SPRITE_PROGRESS.
+  spriteUpdate(t, button) {
+    const since = shared(SPRITE_REFRESH) ?? 0;
+    const p = shared(SPRITE_PROGRESS);
+    const mine = Boolean(since) && p?.since === since;
+    const running = Boolean(since) && (!mine || p.done < p.total);
+    const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+    const status = !since ? "Fetches every card's Pokémon again, so new and revised SpriteCollab sprites show."
+      : running ? `Updating from SpriteCollab… ${mine ? `${p.done} of ${p.total}` : ""}`
+      : `Updated ${p.total} sprite${p.total === 1 ? "" : "s"} ${ago(since)}${p.failed ? ` · ${p.failed} could not be fetched, retrying in 5 min` : ""}`;
+    return h_flex().gap(10).items_center()
+      .child(running
+        ? h_flex().h(32).px(14).items_center().rounded(8).text_size(12.5).border_1().border_color(t.input).bg(t.surface).text_color(t.dim).child("Update sprites")
+        : button("update-sprites", "Update sprites", (cx) => { setShared(SPRITE_REFRESH, Date.now()); cx.notify(); }, false))
+      .child(div().flex_1().min_w(0).text_size(11.5).text_color(p?.failed && !running ? t.blocked : t.dim).child(status));
+  }
+
   section(t, label, child) {
     return v_flex().gap(6).child(div().text_size(11.5).font_medium().text_color(t.dim).child(label)).child(child);
   }
@@ -213,24 +250,6 @@ export default class WorkspaceDialog extends View {
   }
 
   render(_cx) {
-  // Update sprites: space-panel fetches every card's sprite again from SpriteCollab (new and
-  // revised sprites; a gap that has since been drawn), and reports back in SPRITE_PROGRESS.
-  spriteUpdate(t, button) {
-    const since = shared(SPRITE_REFRESH) ?? 0;
-    const p = shared(SPRITE_PROGRESS);
-    const mine = Boolean(since) && p?.since === since;
-    const running = Boolean(since) && (!mine || p.done < p.total);
-    const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
-    const status = !since ? "Fetches every card's Pokémon again, so new and revised SpriteCollab sprites show."
-      : running ? `Updating from SpriteCollab… ${mine ? `${p.done} of ${p.total}` : ""}`
-      : `Updated ${p.total} sprite${p.total === 1 ? "" : "s"} ${ago(since)}${p.failed ? ` · ${p.failed} could not be fetched, retrying in 5 min` : ""}`;
-    return h_flex().gap(10).items_center()
-      .child(running
-        ? h_flex().h(32).px(14).items_center().rounded(8).text_size(12.5).border_1().border_color(t.input).bg(t.surface).text_color(t.dim).child("Update sprites")
-        : button("update-sprites", "Update sprites", (cx) => { setShared(SPRITE_REFRESH, Date.now()); cx.notify(); }, false))
-      .child(div().flex_1().min_w(0).text_size(11.5).text_color(p?.failed && !running ? t.blocked : t.dim).child(status));
-  }
-
     const t = theme();
     const fill = MARK[this.color] ?? t[this.color];
     const typed = this.name.value().trim();
