@@ -99,9 +99,12 @@ const myReviewBadge = (t, pr, long) => {
   const [glyph, word, tone] = MY_REVIEW[pr.myReview.state] ?? ["●", pr.myReview.state.toLowerCase(), "muted"];
   const tip = `You ${word === "changes" ? "requested changes" : word} on ${day(pr.myReview.at)}`
     + (pr.rerequested ? `; review requested again on ${day(pr.requestedAt)}` : "");
+  // A glyph alone says nothing to a screen reader: the image role keeps the label in the tree.
+  const mark = (tone) => div().flex_none().role("image").accessibility_label(pr.rerequested ? `Re-requested. ${tip}` : tip)
+    .text_color(ink(t, tone, paper)).tooltip(tip);
   return pr.rerequested
-    ? div().flex_none().text_color(ink(t, "working", paper)).tooltip(tip).child(long ? `↻ re-requested (${word})` : "↻")
-    : div().flex_none().text_color(ink(t, tone, paper)).tooltip(tip).child(long ? `${glyph} ${word}` : glyph);
+    ? mark("working").child(long ? `↻ re-requested (${word})` : "↻")
+    : mark(tone).child(long ? `${glyph} ${word}` : glyph);
 };
 
 export default class Tasks extends View {
@@ -382,7 +385,7 @@ export default class Tasks extends View {
     return v_flex().id(`${mark}-rail`).size_full().on_size_change((size, cx) => this.measureRail(size, cx)).bg(t.chrome)
       .pt(10).gap(8).items_center().cursor_pointer().on_click((_e, cx) => this.openDetail({ tab }, cx))
       .child(brand(t, mark, 15, t.chrome))
-      .children(counts.map(([n, tone, label]) => div().tooltip(label).text_size(12).font_medium()
+      .children(counts.map(([n, tone, label]) => div().tooltip(label).role("label").accessibility_label(`${label}: ${n}`).text_size(12).font_medium()
         .text_color(n ? t[tone] : t.dim).child(String(n))));
   }
 
