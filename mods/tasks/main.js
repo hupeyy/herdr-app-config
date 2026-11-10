@@ -225,7 +225,8 @@ export default class Tasks extends View {
       .children(this.open.map((x) => tab(`open-${tabId(x)}`, Boolean(this.detail) && tabId(this.detail) === tabId(x),
         [brand(t, x.kind === "ticket" ? "jira" : "github", 13, t.popover), div().truncate().tooltip(tip(x)).child(label(x))],
         () => this.show(x), (cx) => this.closeTab(x, cx), { on: Boolean(x.pinned), toggle: (cx) => this.togglePin(x, cx) })))
-      .when(this.open.filter((o) => !o.pinned).length > 1, (el) => el.child(div().flex_1()).child(div().id("close-all-tabs").px(8).h(26).flex_none()
+      .child(div().flex_1())
+      .when(this.open.filter((o) => !o.pinned).length > 1, (el) => el.child(div().id("close-all-tabs").px(8).h(26).flex_none()
         .flex().items_center().rounded(6).text_size(11.5).text_color(t.dim).cursor_pointer().tooltip("Close every tab that is not pinned")
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => {
@@ -234,7 +235,12 @@ export default class Tasks extends View {
           if (this.detail && !this.open.some((o) => tabId(o) === tabId(this.detail))) this.show(null);
           cx.notify();
         })
-        .child("Close all")));
+        .child("Close all")))
+      .when(Boolean(props()?.overlay), (el) => el.child(div().id("close-board").size(26).flex_none().flex().items_center().justify_center()
+        .rounded(6).text_color(t.dim).cursor_pointer().tooltip("Close (Esc)")
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click(() => closeOverlay(props().overlay))
+        .child(svg(ICON("x")).size(14))));
   }
 
   holdBoard() {
