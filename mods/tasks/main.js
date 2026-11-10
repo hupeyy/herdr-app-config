@@ -90,7 +90,7 @@ const reviewBadge = (t, pr) => {
 };
 
 // My own review on a PR someone else wrote: re-requested (asked again after I reviewed) wins over
-// the verdict I left. `long` spells it out; the rail shows the glyph with the words in a tooltip.
+// the verdict I left. The board's `long` form adds the verdict to "re-requested"; the rail keeps it short.
 const MY_REVIEW = { APPROVED: ["✓", "approved", "done"], CHANGES_REQUESTED: ["✗", "changes", "blocked"], COMMENTED: ["●", "commented", "muted"], DISMISSED: ["–", "dismissed", "dim"] };
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
 
@@ -103,8 +103,8 @@ const myReviewBadge = (t, pr, long) => {
   const mark = (tone) => div().flex_none().role("image").accessibility_label(pr.rerequested ? `Re-requested. ${tip}` : tip)
     .text_color(ink(t, tone, paper)).tooltip(tip);
   return pr.rerequested
-    ? mark("working").child(long ? `↻ re-requested (${word})` : "↻")
-    : mark(tone).child(long ? `${glyph} ${word}` : glyph);
+    ? mark("working").child(long ? `↻ re-requested (${word})` : "↻ re-requested")
+    : mark(tone).child(`${glyph} ${word}`);
 };
 
 export default class Tasks extends View {
