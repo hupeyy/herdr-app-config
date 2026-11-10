@@ -212,6 +212,8 @@ function fileProgram(pane, label, light) {
 
 // Claude started from a shell reports itself (OSC 7501) only while it works, so its pane shows
 // the shell. The herdr-resume hook labels the terminal claude.session from start to exit.
+// A browser tab (mods/browser): the globe, tinted like the other icons.
+const BROWSER = { icon: "mods/browser/globe.svg", tint: true };
 const CLAUDE = { key: "claude", name: "Claude Code", icon: "icons/claude.svg", tint: false, tile: null, color: null, shell: false, agent: true };
 function withClaude(list, all) {
   const marked = new Set(all.filter((x) => x.labels?.["claude.session"]).map((x) => x.address));
@@ -521,7 +523,7 @@ export default class DevWorkspaces extends View {
       const agent = Boolean(pane.program?.agent);
       return {
         id: `pane-${pane.pane}`, depth, status: agent ? statusOf(raw, pane.status) : null,
-        program: pane.mod === "file-view" ? fileProgram(pane, label, ctx.light) : pane.mod === "agent-view" ? CLAUDE : pane.program,
+        program: pane.mod === "file-view" ? fileProgram(pane, label, ctx.light) : pane.mod === "agent-view" ? CLAUDE : pane.mod === "browser" ? BROWSER : pane.program,
         name: label, msg: agent ? msgOf(raw) : basename(pane.cwd ?? ""), at: agent ? raw?.status_ms : null,
         shell: pane.terminal ? this.shells.get(pane.terminal) : null,
         mark: pane.mod === "file-view" ? (shared("file.tabs") ?? {})[pane.pane]?.mark ?? null : null,
@@ -614,7 +616,7 @@ export default class DevWorkspaces extends View {
     // rolls the sub-agents in, so a working child keeps the card in progress.
     const latest = rows.filter((r) => r.status && !/^(agent|sub)-/.test(r.id))
       .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || (b.at ?? 0) - (a.at ?? 0))[0];
-    const menuHeight = 44 + 30 * (this.agentChoices.length + (space.active ? 3 : 2));
+    const menuHeight = 44 + 30 * (this.agentChoices.length + (space.active ? 4 : 3));
     const dropping = this.moved && Boolean(this.drag) && this.dropTarget === space.id && this.drag.space !== space.id;
 
     return v_flex().id(`card-${space.id}`).mx(8).mt(8).p(8).gap(3).flex_none().rounded(10)
@@ -896,6 +898,7 @@ export default class DevWorkspaces extends View {
       { id: "term-tab", label: "Terminal", icon: "terminal", action: () => run("tab.new", { space, folder }) },
       ...(active ? [{ id: "term-split", label: "Terminal beside this pane", icon: "panel-right", action: () => run("terminal.open", { place: "right", folder }) }] : []),
       { id: "files", label: "Files", icon: "files", action: () => run("tab.new", { space, name: "Files", mod: "file-view", props: { root: folder } }) },
+      { id: "browser", label: "Browser", program: BROWSER, action: () => run("tab.new", { space, name: "Browser", mod: "browser", props: { url: "about:blank" } }) },
     ], "Add to this dev workspace");
   }
 

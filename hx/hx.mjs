@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { call as browserCall, ensureDaemon, CHROME_PORT } from "./browser.mjs";
 
 const HOME = join(homedir(), ".config", "herdr-app");
 const BRIDGE = join(HOME, "data", "hx");
@@ -47,6 +48,25 @@ Talk to agents
   hx read <target> [--lines <n>]       its screen (plus n lines of history)
   hx wait <target> [--timeout <s>]     until it stops working
 
+Browser tabs (one shared headless Chrome; pages show as herdr tabs, agents drive them here)
+  hx browser open <url> [--space <space>] [--name <n>] [--show]
+                                       a browser tab in your dev workspace (or --space)
+  hx browser ls [--json]               every page: number, title, url, dev workspace/tab
+  hx browser nav <url|back|forward|reload> [--tab <b>]
+  hx browser snap [--tab <b>]          numbered list of links, buttons and fields
+  hx browser click <n|css|x,y> [--double] [--tab <b>]
+  hx browser type <text> [--into <n|css>] [--clear] [--enter] [--tab <b>]
+  hx browser key <key> [--tab <b>]     enter, escape, tab, up, pagedown, ctrl+a, ...
+  hx browser scroll [<pixels>] [--tab <b>]  down by default; negative scrolls up
+  hx browser text [--max <chars>] [--tab <b>]   the page's visible text
+  hx browser shot [--full] [--tab <b>] saves a PNG and prints its path (read it to see the page)
+  hx browser eval <js> [--tab <b>]     run JavaScript in the page, print the result
+  hx browser wait [--for <css>] [--text <t>] [--timeout <s>] [--tab <b>]
+  hx browser close [--tab <b>]         closes the page and its herdr tab
+  hx browser stop                      quit the browser (pages reopen when their tab shows again)
+  --tab takes a number from ls, a page id, or a herdr "space/tab"; without it, the newest page
+  in your dev workspace, else the only page. DevTools: http://127.0.0.1:${CHROME_PORT} (chrome-devtools-mcp --browser-url).
+
 New spaces and tabs open in the background (your view stays) unless --show.
 --agent defaults to "claude" when --task is given. Exit codes: 0 ok, 1 error, 2 refused.`;
 
@@ -61,7 +81,7 @@ function parseArgs(argv) {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (["json", "force", "show", "help"].includes(key)) opt[key] = true;
+      if (["json", "force", "show", "help", "full", "double", "enter", "clear"].includes(key)) opt[key] = true;
       else if (next === undefined) throw new Error(`--${key} needs a value`);
       else { opt[key] = next; i++; }
     } else pos.push(a);
@@ -194,14 +214,18 @@ async function settle(test) {
 
 // ---- background opens: keep the person's view where it was ----
 
-function keepView(st, show, fn) {
-  const space = st.spaces.find((s) => s.active);
-  const tab = space?.tabs.find((t) => t.active);
+// tab.new and space.new show what they open and take the keyboard. Unless --show, put back the
+// person's space, tab and focused pane (from `herdr-app status`), and only what moved.
+const viewNow = () => { try { return JSON.parse(run("herdr-app", ["status"])); } catch { return {}; } };
+
+function keepView(_st, show, fn) {
+  const before = viewNow();
   const out = fn();
-  if (!show && space) {
-    appDo("space.select", { id: space.id });
-    if (tab) appDo("tab.select", { id: tab.id });
-  }
+  if (show || !before.space) return out;
+  const after = viewNow();
+  if (after.space !== before.space) appDo("space.select", { id: before.space });
+  if (after.tab !== before.tab && before.tab) appDo("tab.select", { id: before.tab });
+  if (after.focused_pane !== before.focused_pane && before.focused_pane) appDo("pane.focus", { pane: before.focused_pane });
   return out;
 }
 
@@ -385,7 +409,125 @@ async function main(argv) {
     return print(opt, { target: target.address, wait: waited, reply }, reply);
   }
 
+  if (cmd === "browser") return browser(st, sub, rest, opt);
+
   throw new Error(`unknown command: ${cmd} (hx help)`);
+}
+
+// ---- browser tabs (hx/browser.mjs runs the shared headless Chrome) ----
+
+async function browserTabs(st) {
+  const { tabs } = await browserCall("/tabs");
+  return tabs.map((b, i) => {
+    const space = st.spaces.find((s) => s.tabs.some((t) => t.id === b.owner?.tab)) ?? st.spaces.find((s) => s.id === b.owner?.space) ?? null;
+    const tab = space?.tabs.find((t) => t.id === b.owner?.tab) ?? null;
+    return { n: i + 1, ...b, space: space ? { id: space.id, name: space.name } : null, tab: tab ? { id: tab.id, name: tab.name } : null };
+  });
+}
+
+async function pickBrowser(st, q) {
+  const list = await browserTabs(st);
+  if (!list.length) throw new Error("no browser pages are open (hx browser open <url>)");
+  if (q !== undefined) {
+    const s = String(q);
+    const hit = list.find((b) => String(b.n) === s) ?? list.find((b) => b.id.toLowerCase().startsWith(s.toLowerCase()))
+      ?? list.find((b) => b.tab?.id === s);
+    if (hit) return hit;
+    const { space, tab } = findTab(st, s);
+    const mine = list.filter((b) => (s.includes("/") ? b.tab?.id === tab.id : b.space?.id === space.id));
+    if (mine.length) return mine[mine.length - 1];
+    throw new Error(`no browser page in ${space.name}${s.includes("/") ? `/${tab.name}` : ""}`);
+  }
+  const here = me(st)?.space;
+  const mine = here ? list.filter((b) => b.space?.id === here.id) : [];
+  if (mine.length) return mine[mine.length - 1];
+  if (list.length === 1) return list[0];
+  throw new Error(`${list.length} pages are open; pick one with --tab:\n${list.map(browserLine).join("\n")}`);
+}
+
+const browserLine = (b) => `${b.n}  ${b.title || "(untitled)"}  ${b.url}${b.space ? `  [${b.space.name}${b.tab ? `/${b.tab.name}` : ""}]` : ""}  ${b.id.slice(0, 8)}`;
+
+// "ctrl+shift+a" -> { key: "a", modifiers: 10 }
+function parseKey(text) {
+  const parts = String(text).toLowerCase().split("+");
+  const bit = { alt: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, win: 4, shift: 8 };
+  let modifiers = 0;
+  for (const m of parts.slice(0, -1)) modifiers |= bit[m] ?? 0;
+  return { key: parts[parts.length - 1], modifiers };
+}
+
+const withScheme = (url) => (/^[a-z]+:/i.test(url) ? url : `${/^localhost|^127\./.test(url) ? "http" : "https"}://${url}`);
+
+async function browser(st, sub, rest, opt) {
+  await ensureDaemon();
+  if (sub === "start") return print(opt, await browserCall("/ping"), `browser daemon up; Chrome DevTools on http://127.0.0.1:${CHROME_PORT}`);
+  if (sub === "stop") return print(opt, await browserCall("/quit", {}), "browser closed");
+  if (sub === "ls" || !sub) {
+    const list = await browserTabs(st);
+    return print(opt, list, list.length ? list.map(browserLine).join("\n") : "no browser pages");
+  }
+  if (sub === "open") {
+    const url = withScheme(need(rest[0], "a url"));
+    const space = opt.space ? findSpace(st, opt.space) : me(st)?.space ?? st.spaces.find((s) => s.active);
+    if (!space) throw new Error("no dev workspace to open it in (use --space)");
+    const page = await browserCall("/open", { url, owner: { space: space.id } });
+    const out = keepView(st, opt.show, () => appDo("tab.new", { space: space.id, name: opt.name ?? "Browser", mod: "browser", props: { id: page.id, url } }));
+    if (out.tab) await browserCall("/owner", { id: page.id, owner: { space: space.id, tab: out.tab } });
+    await browserCall("/wait", { id: page.id, timeout: 15 }).catch(() => {});
+    const b = (await browserTabs(state())).find((x) => x.id === page.id) ?? { n: "?", ...page };
+    return print(opt, b, `opened ${browserLine(b)}`);
+  }
+  const b = await pickBrowser(st, opt.tab);
+  const id = b.id;
+  if (sub === "nav") {
+    const what = need(rest[0], "a url or back|forward|reload");
+    const r = await browserCall("/nav", ["back", "forward", "reload", "stop"].includes(what) ? { id, action: what } : { id, url: withScheme(what) });
+    return print(opt, r, `${r.title || "(untitled)"}  ${r.url}`);
+  }
+  if (sub === "snap") {
+    const r = await browserCall("/snap", { id });
+    return print(opt, r, `${r.title}  ${r.url}\n${r.items.join("\n") || "(nothing clickable)"}`);
+  }
+  if (sub === "click") {
+    const what = need(rest[0], "a ref number, a CSS selector, or x,y");
+    const xy = /^(\d+),(\d+)$/.exec(what);
+    const r = await browserCall("/click", xy ? { id, x: Number(xy[1]), y: Number(xy[2]), double: opt.double } : { id, ref: what, double: opt.double });
+    return print(opt, r, `clicked ${what} at ${Math.round(r.clicked.x)},${Math.round(r.clicked.y)}; now ${r.url}`);
+  }
+  if (sub === "type") {
+    const r = await browserCall("/type", { id, ref: opt.into, text: rest.join(" "), enter: opt.enter, clear: opt.clear });
+    return print(opt, r, `typed${opt.into ? ` into ${opt.into}` : ""}${opt.enter ? " + enter" : ""}; now ${r.url}`);
+  }
+  if (sub === "key") {
+    const r = await browserCall("/key", { id, ...parseKey(need(rest[0], "a key")) });
+    return print(opt, r, `pressed ${rest[0]}`);
+  }
+  if (sub === "scroll") {
+    const r = await browserCall("/scroll", { id, dy: Number(rest[0] ?? 600) });
+    return print(opt, r, `scrolled ${rest[0] ?? 600}`);
+  }
+  if (sub === "text") {
+    const r = await browserCall("/text", { id, max: Number(opt.max ?? 20000) });
+    return print(opt, r, `${r.title}  ${r.url}\n\n${r.text}`);
+  }
+  if (sub === "shot") {
+    const r = await browserCall("/shot", { id, full: opt.full });
+    return print(opt, r, r.path);
+  }
+  if (sub === "eval") {
+    const r = await browserCall("/eval", { id, js: need(rest.join(" "), "JavaScript") });
+    return print(opt, r, typeof r.value === "string" ? r.value : JSON.stringify(r.value, null, 2) ?? "undefined");
+  }
+  if (sub === "wait") {
+    const r = await browserCall("/wait", { id, selector: opt.for, text: opt.text, timeout: Number(opt.timeout ?? 15) });
+    return print(opt, r, `ready: ${r.title}  ${r.url}`);
+  }
+  if (sub === "close") {
+    await browserCall("/close", { id });
+    if (b.tab) appDo("tab.close", { id: b.tab.id, confirmed: true });
+    return print(opt, { closed: id }, `closed ${browserLine(b)}`);
+  }
+  throw new Error(`unknown: hx browser ${sub}`);
 }
 
 main(process.argv.slice(2)).catch((e) => {
