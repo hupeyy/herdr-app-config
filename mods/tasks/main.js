@@ -1,5 +1,6 @@
-// Jira and GitHub, Orca style. props.view "rail" is the compact sidebar block; with no view
-// (opened by mod.open or a tab) it is the full board.
+// Jira and GitHub, Orca style. props.view "rail" is the compact sidebar block (props.rail "jira" or
+// "github" draws only that side, as the panel's Jira and GitHub tabs); with no view (opened by
+// mod.open or a tab) it is the full board.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, TextareaState } from "gpui-base";
@@ -19,7 +20,7 @@ const boardOpen = () => Date.now() - (shared(BOARD)?.at ?? 0) < BOARD_LEASE_MS;
 import { POLL_MS, STALE_MS, snapshot, refresh, forBranch, withMoves, moveTicket } from "./data.js";
 import { ticketDrawer, prPage } from "./detail.js";
 import { toolbar, jiraBody } from "./jira.js";
-import { ink, onFill } from "./colors.js";
+import { ink, onFill, contrast } from "./colors.js";
 import { brand } from "./brand.js";
 
 // Which mark a board tab and a rail section carry.
@@ -28,6 +29,9 @@ const TAB_BRAND = { jira: "jira", mine: "github", review: "github" };
 // The surface this render draws on (rail: chrome, board: popover), for readable status text.
 // Set at the start of each render, which runs to the end before another copy renders.
 let paper = null;
+
+// GitHub's link blue: the dark-mode shade, or the light-mode one where that falls under 3:1.
+const blue = (bg) => (contrast("#58A6FF", bg) >= 3 ? "#58A6FF" : "#0969DA");
 
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 const CI = { SUCCESS: ["✓", "passing", "done"], FAILURE: ["✗", "failing", "blocked"], ERROR: ["✗", "error", "blocked"], PENDING: ["●", "running", "working"], EXPECTED: ["●", "waiting", "working"] };
@@ -138,7 +142,7 @@ export default class Tasks extends View {
       .on_click((_e, cx) => this.fold(id, cx))
       .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(11).flex_none().text_color(t.dim))
       .when(Boolean(mark), (el) => el.child(brand(t, mark, 11, t.chrome)))
-      .child(div().truncate().text_color(tone ? ink(t, tone, paper) : t.dim).child(label))
+      .child(div().truncate().text_color(tone ? ink({ ...t, blue: blue(paper) }, tone, paper) : t.dim).child(label))
       .child(div().text_color(t.dim).child(String(count)));
   }
 
@@ -342,6 +346,132 @@ export default class Tasks extends View {
       .child(v_flex().id("rail-list").flex_1().min_h(0).px(8).overflow_y_scrollbar().children(rows));
   }
 
+  // ---- Jira and GitHub rails: one side each, for the panel's Jira and GitHub tabs ----
+
+  // Both report their drawn width, so the compact view follows the real size.
+  measureRail(size, cx) {
+    const width = size.width / (settings().zoom || 1); // layout px, like COMPACT_PX
+    if (Math.abs((this.railWidth ?? -1) - width) < 1) return;
+    this.railWidth = width;
+    cx.notify();
+  }
+
+  // Under COMPACT_PX: the mark and a count per list; a click opens that side of the board.
+  compactRail(t, mark, tab, counts) {
+    return v_flex().id(`${mark}-rail`).size_full().on_size_change((size, cx) => this.measureRail(size, cx)).bg(t.chrome)
+      .pt(10).gap(8).items_center().cursor_pointer().on_click((_e, cx) => this.openDetail({ tab }, cx))
+      .child(brand(t, mark, 15, t.chrome))
+      .children(counts.map(([n, tone, label]) => div().tooltip(label).text_size(12).font_medium()
+        .text_color(n ? t[tone] : t.dim).child(String(n))));
+  }
+
+  railFrame(t, snap, mark, title, subtitle, tab, rows, empty, filter) {
+    const stale = snap && Date.now() - snap.at > STALE_MS;
+    return v_flex().id(`${mark}-rail`).size_full().min_h(0).on_size_change((size, cx) => this.measureRail(size, cx)).bg(t.chrome).text_size(12.5)
+      .child(h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().gap(8)
+        .child(brand(t, mark, 13, t.chrome))
+        .child(div().flex_none().text_size(11.5).font_medium().text_color(t.muted).child(title))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(subtitle ?? ""))
+        .when(Boolean(filter), (el) => el.child(filter))
+        .child(div().id(`${mark}-age`).flex_none().text_size(11).text_color(stale ? ink(t, "blocked", paper) : t.dim)
+          .tooltip(snap?.errors?.join("\n") || "Refresh").cursor_pointer()
+          .hover((s) => s.text_color(t.foreground))
+          .on_click((_e, cx) => this.reload(cx))
+          .child(stale ? `stale · ${age(snap)}` : age(snap)))
+        .child(div().id(`${mark}-open`).flex_none().text_color(t.dim).cursor_pointer().tooltip("Open the board (ctrl-shift-j)")
+          .hover((s) => s.text_color(t.foreground))
+          .on_click((_e, cx) => this.openDetail({ tab }, cx))
+          .child(svg(ICON("layers")).size(14))))
+      .child(v_flex().id(`${mark}-list`).flex_1().min_h(0).px(8).overflow_y_scrollbar()
+        .when(!snap, (el) => el.child(div().p(8).text_color(t.dim).child("Loading…")))
+        .when(Boolean(snap) && !rows.length, (el) => el.child(div().p(8).text_color(t.dim).child(empty)))
+        .children(rows));
+  }
+
+  // An empty list draws nothing, not even its header.
+  railSection(t, id, label, items, tone, draw) {
+    if (!items.length) return [];
+    return [this.header(t, id, label, items.length, tone), ...(this.folded.has(id) ? [] : items.map(draw))];
+  }
+
+  // The sprint and backlog tickets in the board's columns, in board order, so each row has room
+  // for its summary. Mine only by default; the header button switches to everyone's (remembered).
+  // A column of done tickets starts folded.
+  renderJiraRail(t, snap) {
+    const branch = currentBranch();
+    const here = forBranch(snap, branch);
+    this.jiraAll ??= localStorage.getItem("jira.all") === "1";
+    const all = this.jiraAll;
+    const mine = withMoves(snap?.tickets ?? []).filter((x) => (all || x.mine) && x.key !== here.ticket?.key);
+    const columns = [...(snap?.columns ?? []), { name: "Other", statusIds: [] }];
+    const columnOf = (x) => columns.find((c) => c.statusIds.includes(x.statusId)) ?? columns[columns.length - 1];
+    const groups = columns.map((c) => ({ c, items: mine.filter((x) => columnOf(x) === c) })).filter((g) => g.items.length);
+    if (narrow(this.railWidth)) {
+      const count = (category) => mine.filter((x) => x.category === category).length;
+      return this.compactRail(t, "jira", "jira", [[count("indeterminate"), "working", "In progress"], [count("new"), "foreground", "To do"]]);
+    }
+    for (const g of groups) {
+      const id = `jr-col-${g.c.name}`;
+      if (this.seenColumns?.has(id)) continue;
+      (this.seenColumns ??= new Set()).add(id);
+      if (g.items.every((x) => x.category === "done")) this.folded.add(id);
+    }
+    const ticketRow = (prefix, withStatus) => (x) => this.row(t, `${prefix}-${x.key}`, { kind: "ticket", key: x.key, url: x.url }, [
+      div().flex_none().text_color(t.dim).child(x.key),
+      div().flex_1().min_w(0).truncate().text_color(t.foreground).tooltip(x.epic ? `${x.summary}\nEpic: ${x.epic.summary}` : x.summary).child(x.summary),
+      ...(all && !x.mine ? [div().flex_none().max_w(80).truncate().text_size(11).text_color(t.muted).child(x.assignee)] : []),
+      ...(withStatus ? [pill(t, x.status, CATEGORY[x.category])] : []),
+      ...(x.scope === "backlog" ? [div().flex_none().text_size(11).text_color(t.dim).child("Backlog")] : []),
+    ]);
+    const rows = [
+      ...this.railSection(t, "jr-here", here.key ?? "This branch", here.ticket ? [here.ticket] : [], "accent", ticketRow("jh", true)),
+      ...groups.flatMap((g) => this.railSection(t, `jr-col-${g.c.name}`, g.c.name, g.items, CATEGORY[g.items[0].category], ticketRow("jc", false))),
+    ];
+    const filter = div().id("jira-filter").flex_none().px(7).h(20).flex().items_center().rounded(5).text_size(11)
+      .bg(t.selected).text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
+      .tooltip(all ? "Showing everyone's tickets. Click for mine." : "Showing my tickets. Click for everyone's.")
+      .on_click((_e, cx) => {
+        this.jiraAll = !all;
+        localStorage.setItem("jira.all", this.jiraAll ? "1" : "0");
+        cx.notify();
+      })
+      .child(all ? "View mine" : "View all");
+    return this.railFrame(t, snap, "jira", "Jira", snap?.sprint, "jira", rows, all ? "No tickets." : "No tickets assigned to you.", filter);
+  }
+
+  renderGithubRail(t, snap) {
+    const branch = currentBranch();
+    const here = forBranch(snap, branch);
+    const onBranch = new Set(here.prs.map((p) => p.url));
+    const review = (snap?.review ?? []).filter((p) => !onBranch.has(p.url));
+    const mine = (snap?.mine ?? []).filter((p) => !onBranch.has(p.url));
+    if (narrow(this.railWidth)) {
+      return this.compactRail(t, "github", "mine", [[review.length, "blocked", "Review requests"], [mine.length, "foreground", "My PRs"]]);
+    }
+    const prRow = (prefix, withAuthor) => (pr) => this.row(t, `${prefix}-${pr.url}`, { kind: "pr", url: pr.url }, [
+      ciBadge(t, pr, false),
+      div().flex_none().text_color(pr.branch === branch ? ink(t, "accent", paper) : t.dim).child(`#${pr.number}`),
+      div().flex_1().min_w(0).truncate().text_color(pr.draft ? t.muted : t.foreground).tooltip(`${pr.repo} #${pr.number}  ${pr.title}`).child(pr.title),
+      withAuthor ? div().flex_none().max_w(90).truncate().text_color(t.muted).child(pr.author) : reviewBadge(t, pr),
+    ]);
+    // My PRs under one header, with a repo label above each repo's rows once they span more than one.
+    const repos = [...new Set(mine.map((p) => p.repo))].sort((a, b) => a.localeCompare(b));
+    const repoLabel = (repo) => div().id(`gh-repo-${repo}`).px(8).pt(6).h(22).flex_none().text_size(11).text_color(t.dim).child(repo);
+    const mineRows = !mine.length ? [] : [
+      this.header(t, "gh-mine", "My PRs", mine.length, "blue"),
+      ...(this.folded.has("gh-mine") ? [] : repos.flatMap((repo) => [
+        ...(repos.length > 1 ? [repoLabel(repo)] : []),
+        ...mine.filter((p) => p.repo === repo).map(prRow("gm", false)),
+      ])),
+    ];
+    const rows = [
+      ...this.railSection(t, "gh-here", here.key ?? "This branch", here.prs, "accent", prRow("gh", false)),
+      ...this.railSection(t, "gh-review", "Review requests", review, "blocked", prRow("gr", true)),
+      ...mineRows,
+    ];
+    return this.railFrame(t, snap, "github", "GitHub", null, "mine", rows, "No open PRs or review requests.");
+  }
+
   // ---- Board: the full Orca-style view ----
 
   prGroups(t, prs, withAuthor) {
@@ -451,6 +581,8 @@ export default class Tasks extends View {
       this.takeRequest(request.target);
     }
     paper = this.rail ? t.chrome : t.popover;
-    return this.rail ? this.renderRail(t, snap) : this.renderBoard(t, snap, cx);
+    if (!this.rail) return this.renderBoard(t, snap, cx);
+    const side = props()?.rail;
+    return side === "jira" ? this.renderJiraRail(t, snap) : side === "github" ? this.renderGithubRail(t, snap) : this.renderRail(t, snap);
   }
 }

@@ -139,19 +139,25 @@
                           }
                         },
                         {
-                          "id": "changes",
-                          "type": "block",
-                          "content": {
-                            "mod": "changes"
-                          }
-                        },
-                        {
-                          "id": "tasks",
+                          "id": "jira",
                           "type": "block",
                           "content": {
                             "mod": "tasks",
                             "props": {
                               "view": "rail",
+                              "rail": "jira",
+                              "column": "panel"
+                            }
+                          }
+                        },
+                        {
+                          "id": "github",
+                          "type": "block",
+                          "content": {
+                            "mod": "tasks",
+                            "props": {
+                              "view": "rail",
+                              "rail": "github",
                               "column": "panel"
                             }
                           }
