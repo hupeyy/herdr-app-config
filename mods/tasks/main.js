@@ -89,11 +89,26 @@ const reviewBadge = (t, pr) => {
   return div().flex_none().text_color(ink(t, tone, paper)).child(word);
 };
 
+// My own review on a PR someone else wrote: re-requested (asked again after I reviewed) wins over
+// the verdict I left. `long` spells it out; the rail shows the glyph with the words in a tooltip.
+const MY_REVIEW = { APPROVED: ["✓", "approved", "done"], CHANGES_REQUESTED: ["✗", "changes", "blocked"], COMMENTED: ["●", "commented", "muted"], DISMISSED: ["–", "dismissed", "dim"] };
+const day = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
+
+const myReviewBadge = (t, pr, long) => {
+  if (!pr.myReview) return div().flex_none();
+  const [glyph, word, tone] = MY_REVIEW[pr.myReview.state] ?? ["●", pr.myReview.state.toLowerCase(), "muted"];
+  const tip = `You ${word === "changes" ? "requested changes" : word} on ${day(pr.myReview.at)}`
+    + (pr.rerequested ? `; review requested again on ${day(pr.requestedAt)}` : "");
+  return pr.rerequested
+    ? div().flex_none().text_color(ink(t, "working", paper)).tooltip(tip).child(long ? `↻ re-requested (${word})` : "↻")
+    : div().flex_none().text_color(ink(t, tone, paper)).tooltip(tip).child(long ? `${glyph} ${word}` : glyph);
+};
+
 export default class Tasks extends View {
   init(_props, cx) {
     this.rail = props()?.view === "rail";
     this.tab = "jira";
-    this.folded = new Set(["rail-sprint"]);
+    this.folded = new Set(["rail-sprint", "gh-reviewed"]);
     this.foldedDone = false;
     if (!this.rail) {
       this.handle = cx.focus_handle();
@@ -449,16 +464,19 @@ export default class Tasks extends View {
     const branch = currentBranch();
     const here = forBranch(snap, branch);
     const onBranch = new Set(here.prs.map((p) => p.url));
-    const review = (snap?.review ?? []).filter((p) => !onBranch.has(p.url));
+    const requests = (snap?.review ?? []).filter((p) => !onBranch.has(p.url));
+    const rerequested = requests.filter((p) => p.rerequested);
+    const review = requests.filter((p) => !p.rerequested);
+    const reviewed = (snap?.reviewed ?? []).filter((p) => !onBranch.has(p.url));
     const mine = (snap?.mine ?? []).filter((p) => !onBranch.has(p.url));
     if (narrow(this.railWidth)) {
-      return this.compactRail(t, "github", "mine", [[review.length, "blocked", "Review requests"], [mine.length, "foreground", "My PRs"]]);
+      return this.compactRail(t, "github", "mine", [[rerequested.length, "working", "Re-requested"], [review.length, "blocked", "Review requests"], [mine.length, "foreground", "My PRs"]]);
     }
     const prRow = (prefix, withAuthor) => (pr) => this.row(t, `${prefix}-${pr.url}`, { kind: "pr", url: pr.url }, [
       ciBadge(t, pr, false),
       div().flex_none().text_color(pr.branch === branch ? ink(t, "accent", paper) : t.dim).child(`#${pr.number}`),
       div().flex_1().min_w(0).truncate().text_color(pr.draft ? t.muted : t.foreground).tooltip(`${pr.repo} #${pr.number}  ${pr.title}`).child(pr.title),
-      withAuthor ? div().flex_none().max_w(90).truncate().text_color(t.muted).child(pr.author) : reviewBadge(t, pr),
+      ...(withAuthor ? [myReviewBadge(t, pr, false), div().flex_none().max_w(90).truncate().text_color(t.muted).child(pr.author)] : [reviewBadge(t, pr)]),
     ]);
     // My PRs under one header, with a repo label above each repo's rows once they span more than one.
     const repos = [...new Set(mine.map((p) => p.repo))].sort((a, b) => a.localeCompare(b));
@@ -472,8 +490,10 @@ export default class Tasks extends View {
     ];
     const rows = [
       ...this.railSection(t, "gh-here", here.key ?? "This branch", here.prs, "accent", prRow("gh", false)),
+      ...this.railSection(t, "gh-rere", "Re-requested", rerequested, "working", prRow("gq", true)),
       ...this.railSection(t, "gh-review", "Review requests", review, "blocked", prRow("gr", true)),
       ...mineRows,
+      ...this.railSection(t, "gh-reviewed", "Reviewed by me", reviewed, "done", prRow("gd", true)),
     ];
     return this.railFrame(t, snap, "github", "GitHub", null, "mine", rows, "No open PRs or review requests.");
   }
@@ -490,10 +510,23 @@ export default class Tasks extends View {
         div().w(96).flex_none().text_color(t.dim).child(pr.ticket ?? ""),
         div().w(84).flex_none().child(ciBadge(t, pr, true)),
         div().w(72).flex_none().child(reviewBadge(t, pr)),
-        ...(withAuthor ? [div().w(90).flex_none().truncate().text_color(t.muted).child(pr.author)] : []),
+        ...(withAuthor ? [div().w(150).flex_none().child(myReviewBadge(t, pr, true)), div().w(90).flex_none().truncate().text_color(t.muted).child(pr.author)] : []),
         div().flex_1().min_w(0).truncate().text_color(t.foreground).child(pr.title),
       ]),
     }));
+  }
+
+  // Review requests: re-requested ones first (one group), new ones by repo, then the open PRs I
+  // already reviewed that are not waiting on me.
+  reviewGroups(t, snap) {
+    const requests = snap?.review ?? [];
+    const flat = (id, label, tone, items) => (items.length
+      ? [{ ...this.prGroups(t, items, true)[0], id, label, tone, items }] : []);
+    return [
+      ...flat("rv-rere", "Re-requested", "working", requests.filter((p) => p.rerequested)),
+      ...this.prGroups(t, requests.filter((p) => !p.rerequested), true),
+      ...flat("rv-done", "Reviewed by me", "done", snap?.reviewed ?? []),
+    ];
   }
 
   hereGroups(t, snap) {
@@ -520,7 +553,7 @@ export default class Tasks extends View {
     const groups = {
       jira: () => [],
       mine: () => this.prGroups(t, snap?.mine ?? [], false),
-      review: () => this.prGroups(t, snap?.review ?? [], true),
+      review: () => this.reviewGroups(t, snap),
       here: () => this.hereGroups(t, snap),
     }[this.tab]();
     const counts = { jira: snap?.tickets.filter((x) => x.mine).length, mine: snap?.mine.length, review: snap?.review.length };

@@ -17,15 +17,21 @@ const FIELDS = "summary,status,priority,assignee,issuetype,parent,updated";
 export const TICKET_KEY = /(?<![A-Za-z0-9])([A-Z][A-Z0-9]+-\d+)/i;
 
 const PR_QUERY = `
-query($mine: String!, $review: String!) {
+query($mine: String!, $review: String!, $reviewed: String!) {
+  viewer { login }
   mine: search(query: $mine, type: ISSUE, first: 50) { nodes { ...pr } }
   review: search(query: $review, type: ISSUE, first: 50) { nodes { ...pr } }
+  reviewed: search(query: $reviewed, type: ISSUE, first: 50) { nodes { ...pr } }
 }
 fragment pr on PullRequest {
   number title url isDraft reviewDecision headRefName updatedAt
   author { login }
   repository { name }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  latestReviews(first: 30) { nodes { author { login } state submittedAt } }
+  timelineItems(last: 30, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+    nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } } } }
+  }
 }`;
 
 export const snapshot = () => shared(KEY) ?? null;
@@ -212,8 +218,19 @@ function pruneMoves(fetchStartedAt) {
   if (Object.keys(keep).length !== Object.keys(moves).length) setShared(MOVES, keep);
 }
 
-function toPr(node) {
+// My own side of a PR: my latest submitted review, and the last time my review was requested.
+// Re-requested: asked again after that review (the author pushed fixes and wants another look).
+function myReviewOf(node, me) {
+  if (!me) return {};
+  const mine = (node.latestReviews?.nodes ?? []).find((r) => r.author?.login === me && r.state !== "PENDING");
+  const asked = (node.timelineItems?.nodes ?? []).filter((e) => e.requestedReviewer?.login === me).map((e) => e.createdAt).sort().pop() ?? null;
+  const myReview = mine ? { state: mine.state, at: mine.submittedAt } : null;
+  return { myReview, rerequested: Boolean(myReview && asked && asked > myReview.at), requestedAt: asked };
+}
+
+function toPr(node, me) {
   return {
+    ...myReviewOf(node, me),
     repo: node.repository.name,
     number: node.number,
     title: node.title,
@@ -263,8 +280,17 @@ async function fetchPrs() {
   const data = await graphql(PR_QUERY, {
     mine: `${scope} author:@me sort:updated-desc`,
     review: `${scope} review-requested:@me sort:updated-desc`,
+    reviewed: `${scope} reviewed-by:@me -author:@me sort:updated-desc`,
   });
-  return { mine: data.mine.nodes.map(toPr), review: data.review.nodes.map(toPr) };
+  const me = data.viewer?.login ?? null;
+  const review = data.review.nodes.map((n) => toPr(n, me));
+  const asked = new Set(review.map((p) => p.url));
+  return {
+    mine: data.mine.nodes.map((n) => toPr(n, me)),
+    review,
+    // Open PRs I reviewed that are not waiting on me again.
+    reviewed: data.reviewed.nodes.map((n) => toPr(n, me)).filter((p) => !asked.has(p.url) && p.myReview),
+  };
 }
 
 // Refreshes the shared snapshot unless another copy just did or is doing it.
@@ -290,6 +316,7 @@ export async function refresh({ force = false } = {}) {
     jiraMe: jiraData?.me ?? last?.jiraMe ?? null,
     mine: prs?.mine ?? last?.mine ?? [],
     review: prs?.review ?? last?.review ?? [],
+    reviewed: prs?.reviewed ?? last?.reviewed ?? [],
     errors,
   });
   setShared(BUSY, 0);
