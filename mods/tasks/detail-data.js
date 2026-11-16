@@ -1,6 +1,7 @@
 // Full Jira tickets and GitHub PRs for the detail views: body, comments, reviews, checks and diff.
 
 import { jira, github, graphql } from "./data.js";
+import { trackImages } from "./images.js";
 
 // ---- Jira: ADF (Atlassian Document Format) to markdown ----
 
@@ -57,26 +58,58 @@ function block(n, indent = "") {
       return [line(rows[0]), `|${" --- |".repeat(width)}`, ...rows.slice(1).map(line)].join("\n");
     }
     case "mediaSingle":
-    case "mediaGroup": return "*(attachment: open in Jira to view)*";
+    case "mediaGroup": return kids.map((c) => block(c)).filter(Boolean).join("\n\n");
+    case "media": {
+      const url = mediaUrl(n.attrs ?? {});
+      return url ? `![${(n.attrs?.alt ?? "").replace(/[[\]]/g, "")}](<${url}>)` : "*(attachment: open in Jira to view)*";
+    }
     case "expand":
     case "nestedExpand": return `**${n.attrs?.title ?? "Details"}**\n\n${kids.map((c) => block(c)).join("\n\n")}`;
     default: return kids.length ? kids.map((c) => block(c, indent)).join("\n\n") : inline([n]);
   }
 }
 
-export const adfToMarkdown = (doc) => (doc ? block(doc).trim() : "");
+// Finds the download URL of an ADF media node; set only while adfToMarkdown runs.
+let mediaUrl = () => null;
 
-const ISSUE_FIELDS = "summary,description,status,priority,assignee,reporter,labels,issuetype,parent,comment,created,updated,project";
+export function adfToMarkdown(doc, resolveMedia = () => null) {
+  if (!doc) return "";
+  mediaUrl = resolveMedia;
+  try { return block(doc).trim(); } finally { mediaUrl = () => null; }
+}
+
+// ADF media nodes name a Media Services file id, not an attachment id. The alt text is the file
+// name, so match on it. With no alt, take the next image attachment nobody claimed yet; an alt
+// that names no image is another file type (a PDF), which stays a link.
+function mediaResolver(attachments) {
+  const images = attachments.filter((a) => a.mimeType?.startsWith("image/"));
+  const used = new Set();
+  const take = (a) => { if (!a) return null; used.add(a.id); return a.content; };
+  const resolve = (attrs) => {
+    if (attrs.type === "external") return attrs.url ?? null;
+    const free = images.filter((a) => !used.has(a.id));
+    return take(attrs.alt ? free.find((a) => a.filename === attrs.alt) : free[0]);
+  };
+  resolve.unused = () => images.filter((a) => !used.has(a.id)).map((a) => ({ url: a.content, alt: a.filename }));
+  return resolve;
+}
+
+const ISSUE_FIELDS = "summary,description,attachment,status,priority,assignee,reporter,labels,issuetype,parent,comment,created,updated,project";
 
 export async function fetchIssue(key) {
   const d = await jira(`/rest/api/3/issue/${key}?fields=${ISSUE_FIELDS}`);
   const f = d.fields;
+  const media = mediaResolver(f.attachment ?? []);
+  const description = adfToMarkdown(f.description, media);
+  const comments = (f.comment?.comments ?? []).map((c) => ({ id: c.id, author: c.author?.displayName ?? "", created: c.created, body: adfToMarkdown(c.body, media) }));
+  const attachments = media.unused();
+  const images = [description, ...comments.map((c) => c.body), ...attachments.map((a) => `![${a.alt}](<${a.url}>)`)].flatMap((text) => trackImages("jira", text));
   return {
     key: d.key,
     // The REST self link carries the site, so the URL never needs a hard-coded host.
     url: `${d.self.split("/rest/")[0]}/browse/${d.key}`,
     summary: f.summary ?? "",
-    description: adfToMarkdown(f.description) || "*No description.*",
+    description: description || "*No description.*",
     status: f.status?.name ?? "",
     statusId: f.status?.id ?? "",
     category: f.status?.statusCategory?.key ?? "new",
@@ -88,7 +121,9 @@ export async function fetchIssue(key) {
     labels: f.labels ?? [],
     epic: f.parent?.fields?.issuetype?.name === "Epic" ? { key: f.parent.key, summary: f.parent.fields.summary } : null,
     updated: f.updated,
-    comments: (f.comment?.comments ?? []).map((c) => ({ id: c.id, author: c.author?.displayName ?? "", created: c.created, body: adfToMarkdown(c.body) })),
+    comments,
+    attachments, // image attachments not placed in the text
+    images,
   };
 }
 
@@ -105,16 +140,16 @@ const PR_QUERY = `
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      number title body state isDraft url additions deletions changedFiles
+      number title body bodyHTML state isDraft url additions deletions changedFiles
       baseRefName headRefName updatedAt reviewDecision
       author { login }
-      latestReviews(first: 50) { nodes { author { login } state body submittedAt } }
+      latestReviews(first: 50) { nodes { author { login } state body bodyHTML submittedAt } }
       reviewRequests(first: 50) { nodes { requestedReviewer {
         ... on User { login } ... on Team { name slug } ... on Bot { login } ... on Mannequin { login } } } }
-      comments(first: 100) { nodes { author { login } body createdAt } }
+      comments(first: 100) { nodes { author { login } body bodyHTML createdAt } }
       reviewThreads(first: 100) { nodes {
         isResolved isOutdated path line startLine originalLine originalStartLine diffSide
-        comments(first: 50) { nodes { author { login } body createdAt diffHunk } } } }
+        comments(first: 50) { nodes { author { login } body bodyHTML createdAt diffHunk } } } }
       files(first: 100) { nodes { path additions deletions } }
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
         ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
@@ -135,6 +170,7 @@ export async function fetchPr(url) {
   const pr = (await graphql(PR_QUERY, { owner, name, number })).repository?.pullRequest;
   if (!pr) throw new Error(`${owner}/${name} #${number} was not found`);
   const contexts = pr.commits.nodes[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
+  const texts = [pr, ...pr.latestReviews.nodes, ...pr.comments.nodes, ...pr.reviewThreads.nodes.flatMap((th) => th.comments.nodes)];
   return {
     ...pr,
     repo: `${owner}/${name}`,
@@ -145,6 +181,7 @@ export async function fetchPr(url) {
     threads: pr.reviewThreads.nodes.map((th, i) => ({ ...th, id: `th${i}`, comments: th.comments.nodes })),
     files: pr.files.nodes,
     statusCheckRollup: contexts.map((c) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name ?? "" })),
+    images: texts.flatMap((x) => trackImages("github", x.body, x.bodyHTML)),
   };
 }
 

@@ -1,0 +1,1 @@
+Lucide icons (ISC License, https://lucide.dev): refresh-cw, file-diff, eye.

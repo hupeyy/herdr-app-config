@@ -1,14 +1,16 @@
 // Orca-style detail views: a Jira ticket drawer beside the board, and a full PR page.
 
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, Textarea, TextView, Scrollbar, v_virtual_list } from "gpui-base";
+import { v_flex, h_flex, Textarea, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, run, notify, home, settings, closeOverlay, props, shared, setShared } from "herdr";
-import { withMoves, snapshot } from "./data.js";
+import { withMoves, snapshot, PR_CHANGED } from "./data.js";
+import { openPrMenu } from "./pr-menu.js";
 import { fetchIssue, postComment, fetchPr, fetchDiff, diffRows, ago, branchName, agentPrompt,
   threadCode, suggestionMarkdown, threadLines, placeThreads } from "./detail-data.js";
 import { startSpec } from "./start.js";
 import { ink, onFill } from "./colors.js";
 import { brand, JIRA, GITHUB, brandColor } from "./brand.js";
+import { downloadImages, richMarkdown, imageGallery } from "./images.js";
 
 // A name from workspace-chrome, or a full asset path (the brand marks).
 const ICON = (name) => (name.includes("/") ? name : `mods/workspace-chrome/${name}.svg`);
@@ -25,6 +27,8 @@ export function load(view, cx, id, fetcher) {
     try { next.data = await fetcher(); } catch (e) { next.error = String(e.message ?? e); }
     next.loading = false;
     cx.notify();
+    // The text shows first; each image draws as its download lands.
+    await downloadImages(next.data?.images ?? [], () => cx.notify());
   });
   return next;
 }
@@ -70,7 +74,6 @@ function copy(cx, text, what) {
   notify({ title: `Copied ${what}`, body: text.length > 90 ? `${text.slice(0, 90)}…` : text, level: "success", timeout: 2500 });
 }
 
-const markdown = (id, text) => TextView.markdown(id, text || "").selectable(true);
 
 const pill = (t, label, tone) =>
   div().flex_none().px(7).h(20).rounded(10).flex().items_center().text_size(11.5).font_medium()
@@ -95,6 +98,8 @@ export function ticketDrawer(view, t, cx, key, { full = false } = {}) {
   const login = snap?.mine?.[0]?.author ?? "";
   const here = (snap?.columns ?? []).find((c) => c.statusIds.includes(issue.statusId))?.name;
   const picking = view.picking === `drawer-${key}`;
+  // The body column: the drawer less the 220 px action column and the 16 px side padding.
+  const textWidth = Math.max(200, (full ? 1 : 0.58) * (view.size?.width ?? 1400) - 220 - 40);
 
   const header = v_flex().px(16).pt(12).pb(10).gap(6).flex_none().border_b(1).border_color(t.border)
     .child(h_flex().gap(8).items_center().text_size(11.5).text_color(t.dim)
@@ -128,11 +133,14 @@ export function ticketDrawer(view, t, cx, key, { full = false } = {}) {
       .child(div().text_color(t.muted).font_medium().child(issue.type))
       .child(div().child(`${issue.project} · ${issue.reporter ? `reported by ${issue.reporter}` : ""}`))
       .when(Boolean(issue.epic), (el) => el.child(div().truncate().child(`· ${issue.epic.summary}`))))
-    .child(div().text_size(13).text_color(t.foreground).child(markdown(`desc-${key}`, issue.description)))
+    .child(div().text_size(13).text_color(t.foreground).child(richMarkdown(t, `desc-${key}`, issue.description, "jira", textWidth)))
+    .when((issue.attachments ?? []).length > 0, (el) => el
+      .child(div().text_size(12).font_medium().text_color(t.dim).pt(6).child(`Attachments ${issue.attachments.length}`))
+      .child(imageGallery(t, `att-${key}`, "jira", issue.attachments, textWidth)))
     .child(div().text_size(12).font_medium().text_color(t.dim).pt(6).child(`Comments ${issue.comments.length}`))
     .children(issue.comments.map((c) => v_flex().gap(4).p(10).rounded(8).bg(t.surface).border_1().border_color(t.border)
       .child(h_flex().gap(8).text_size(11.5).child(div().font_medium().text_color(t.foreground).child(c.author)).child(div().text_color(t.dim).child(ago(c.created))))
-      .child(div().text_size(12.5).text_color(t.foreground).child(markdown(`cm-${c.id}`, c.body)))));
+      .child(div().text_size(12.5).text_color(t.foreground).child(richMarkdown(t, `cm-${c.id}`, c.body, "jira", textWidth - 22)))));
 
   const side = v_flex().w(220).flex_none().h_full().px(8).py(12).gap(2).border_l(1).border_color(t.border)
     .child(action(t, "a-open", "Open in Jira", JIRA, (cx) => cx.open_url(url), brandColor(t, "jira", t.popover)))
@@ -187,6 +195,13 @@ const checkOf = (c) => ({
 const REVIEW_STATE = { APPROVED: ["Approved", "done"], CHANGES_REQUESTED: ["Changes requested", "blocked"], COMMENTED: ["Commented", "muted"], DISMISSED: ["Dismissed", "dim"] };
 
 export function prPage(view, t, cx, url) {
+  // An action from the PR menu (another overlay) reloads the page it changed.
+  const changed = shared(PR_CHANGED);
+  if (changed && changed.at > (view.prChangeSeen ?? 0)) {
+    view.prChangeSeen = changed.at;
+    const old = view.details.get(`pr:${changed.url}`);
+    if (old) old.stale = true;
+  }
   const entry = load(view, cx, `pr:${url}`, () => fetchPr(url));
   // The diff loads beside the PR, so Files changed is ready when it is opened.
   load(view, cx, `diff:${url}`, () => fetchDiff(url));
@@ -204,6 +219,7 @@ export function prPage(view, t, cx, url) {
   const failing = checks.filter((c) => (CHECK[c.state]?.[2] ?? "") === "blocked").length;
   const state = pr.state === "MERGED" ? ["Merged", "accent"] : pr.state === "CLOSED" ? ["Closed", "blocked"] : pr.isDraft ? ["Draft", "muted"] : ["Open", "done"];
   const tab = view.prTab ?? "conversation";
+  const me = snapshot()?.ghMe;
   const openCount = openThreads(pr.threads ?? []);
   const tabs = [["conversation", "Conversation", openCount || null], ["checks", "Checks", checks.length], ["files", "Files changed", pr.files.length]];
 
@@ -215,6 +231,9 @@ export function prPage(view, t, cx, url) {
     .child(h_flex().gap(16).items_start()
       .child(div().flex_1().min_w(0).text_size(20).font_semibold().text_color(t.foreground)
         .child(`${pr.title}  `).child(div().text_color(t.dim).child(`#${pr.number}`)))
+      .when(pr.state === "OPEN" && Boolean(me) && pr.author?.login === me, (el) => el.child(button(t, "pr-actions", "Actions", () => openPrMenu({
+        url: pr.url, number: pr.number, repo: pr.repo, title: pr.title, draft: pr.isDraft,
+      }, view.actionsBounds), { icon: "chevron-down" }).on_mouse_down("left", (e) => { view.actionsBounds = e.bounds ?? null; })))
       .child(button(t, "start-pr", "Start workspace", () => startWorkspace({
         kind: "pr", url: pr.url, number: pr.number, title: pr.title, branch: pr.headRefName, base: pr.baseRefName,
         repo: pr.repo.split("/")[1] ?? pr.repo,
@@ -271,6 +290,8 @@ function checksTab(t, checks, passing, failing) {
 }
 
 function conversationTab(view, t, pr, checks, passing, failing) {
+  // The event column: the page less its 18 px padding, the 300 px side column, the gap and card padding.
+  const textWidth = Math.max(200, (view.size?.width ?? 1400) - 36 - 300 - 16 - 26);
   const events = [
     { who: pr.author?.login, at: pr.updatedAt, body: pr.body || "*No description provided.*", id: "body" },
     ...(pr.latestReviews ?? []).filter((r) => r.body).map((r, i) => ({ who: r.author?.login, at: r.submittedAt, body: r.body, id: `rv${i}`, state: r.state })),
@@ -281,7 +302,7 @@ function conversationTab(view, t, pr, checks, passing, failing) {
       .child(div().font_medium().text_color(t.foreground).child(e.who ?? ""))
       .when(Boolean(e.state), (el) => el.child(div().text_color(ink(t, REVIEW_STATE[e.state]?.[1] ?? "muted", t.surface)).child(REVIEW_STATE[e.state]?.[0] ?? e.state)))
       .child(div().text_color(t.dim).child(ago(e.at))))
-    .child(div().p(12).text_size(13).text_color(t.foreground).child(markdown(`pr-${e.id}`, e.body)));
+    .child(div().p(12).text_size(13).text_color(t.foreground).child(richMarkdown(t, `pr-${e.id}`, e.body, "github", textWidth)));
 
   const reviewers = [
     ...(pr.latestReviews ?? []).map((r) => ({ who: r.author?.login, state: REVIEW_STATE[r.state] ?? [r.state, "muted"] })),
@@ -316,7 +337,7 @@ function conversationTab(view, t, pr, checks, passing, failing) {
     .children(th.comments.map((c, i) => v_flex().p(12).gap(6).border_t(1).border_color(t.border)
       .child(h_flex().gap(8).text_size(12).child(div().font_medium().text_color(t.foreground).child(c.author?.login ?? ""))
         .child(div().text_color(t.dim).child(ago(c.createdAt))))
-      .child(div().text_size(13).text_color(t.foreground).child(markdown(`pr-${th.id}-${i}`, suggestionMarkdown(c.body, th))))));
+      .child(div().text_size(13).text_color(t.foreground).child(richMarkdown(t, `pr-${th.id}-${i}`, suggestionMarkdown(c.body, th), "github", textWidth)))));
 
   return h_flex().id("conv").size_full().min_h(0).p(18).gap(16).items_start().overflow_y_scrollbar()
     .child(v_flex().flex_1().min_w(0).gap(12).children(events.map(card))

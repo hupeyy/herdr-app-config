@@ -8,13 +8,27 @@ export const STALE_MS = POLL_MS * 3;
 const KEY = "tasks.snapshot";
 const BUSY = "tasks.fetching";
 const MOVES = "tasks.moves";
-const GH_ORG = "ripplepoint";
+export const PR_CHANGED = "tasks.prChanged"; // { url, at } after a PR action, so an open PR page reloads
+export const GH_ORG = "ripplepoint"; // the default owner of the board's All PRs tab
+export const ALL_PRS = "tasks.allPrs"; // { owner, at, prs, total, owners, me } for the All PRs tab
 // RIPPLE's Jira board: its columns, plus its active sprints and backlog for everyone's tickets.
 const BOARD_ID = 21;
 // The backlog's id in the fetch plan. Real sprint ids are numbers, so this never collides.
 const BACKLOG = "backlog";
 const FIELDS = "summary,status,priority,assignee,issuetype,parent,updated";
 export const TICKET_KEY = /(?<![A-Za-z0-9])([A-Z][A-Z0-9]+-\d+)/i;
+
+const PR_FIELDS = `
+fragment pr on PullRequest {
+  number title url isDraft reviewDecision headRefName updatedAt
+  author { login }
+  repository { name }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  reviews(last: 50) { nodes { author { login } state submittedAt } }
+  timelineItems(last: 30, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+    nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } } } }
+  }
+}`;
 
 const PR_QUERY = `
 query($mine: String!, $review: String!, $reviewed: String!) {
@@ -23,16 +37,19 @@ query($mine: String!, $review: String!, $reviewed: String!) {
   review: search(query: $review, type: ISSUE, first: 50) { nodes { ...pr } }
   reviewed: search(query: $reviewed, type: ISSUE, first: 50) { nodes { ...pr } }
 }
-fragment pr on PullRequest {
-  number title url isDraft reviewDecision headRefName updatedAt
-  author { login }
-  repository { name }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-  latestReviews(first: 30) { nodes { author { login } state submittedAt } }
-  timelineItems(last: 30, itemTypes: [REVIEW_REQUESTED_EVENT]) {
-    nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } } } }
+${PR_FIELDS}`;
+
+// Every open PR of one owner (an organization, or the viewer's own repos), 100 a page.
+const ALL_QUERY = `
+query($q: String!, $after: String) {
+  viewer { login organizations(first: 50) { nodes { login } } }
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ...pr }
   }
-}`;
+}
+${PR_FIELDS}`;
 
 export const snapshot = () => shared(KEY) ?? null;
 export const ticketOf = (text) => text?.match(TICKET_KEY)?.[1]?.toUpperCase() ?? null;
@@ -218,25 +235,65 @@ function pruneMoves(fetchStartedAt) {
   if (Object.keys(keep).length !== Object.keys(moves).length) setShared(MOVES, keep);
 }
 
-// My own side of a PR: my latest submitted review, and the last time my review was requested.
+// Each reviewer's latest review, from the full list. Not latestReviews: GitHub drops a reviewer
+// from it once their review is requested again, which hid every re-request.
+// at: their latest review of any kind; state: their latest verdict, else that review's state.
+function reviewsByAuthor(node) {
+  const by = new Map();
+  for (const r of node.reviews?.nodes ?? []) {
+    const who = r.author?.login;
+    if (!who || r.state === "PENDING") continue;
+    const e = by.get(who) ?? { who, at: "", state: null, verdict: null };
+    if (r.submittedAt >= e.at) { e.at = r.submittedAt; e.state = r.state; }
+    if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state) && (!e.verdict || r.submittedAt >= e.verdict.at)) e.verdict = { state: r.state, at: r.submittedAt };
+    by.set(who, e);
+  }
+  return [...by.values()].map((e) => ({ who: e.who, at: e.at, state: e.verdict?.state ?? e.state }));
+}
+
+// When each reviewer was last asked for a review.
+function askedAtOf(node) {
+  const askedAt = new Map();
+  for (const e of node.timelineItems?.nodes ?? []) {
+    const who = e.requestedReviewer?.login;
+    if (who && (!askedAt.has(who) || e.createdAt > askedAt.get(who))) askedAt.set(who, e.createdAt);
+  }
+  return askedAt;
+}
+
+// My own side of a PR: my latest review, and the last time my review was requested.
 // Re-requested: asked again after that review (the author pushed fixes and wants another look).
 function myReviewOf(node, me) {
   if (!me) return {};
-  const mine = (node.latestReviews?.nodes ?? []).find((r) => r.author?.login === me && r.state !== "PENDING");
-  const asked = (node.timelineItems?.nodes ?? []).filter((e) => e.requestedReviewer?.login === me).map((e) => e.createdAt).sort().pop() ?? null;
-  const myReview = mine ? { state: mine.state, at: mine.submittedAt } : null;
+  const mine = reviewsByAuthor(node).find((r) => r.who === me);
+  const asked = askedAtOf(node).get(me) ?? null;
+  const myReview = mine ? { state: mine.state, at: mine.at } : null;
   return { myReview, rerequested: Boolean(myReview && asked && asked > myReview.at), requestedAt: asked };
+}
+
+// The PR's review state for its author. GitHub gives no reviewDecision when the repo does not
+// require reviews (.github), so it is worked out from each reviewer's latest review. REREQUESTED:
+// a reviewer was asked again after their latest review (changes pushed, waiting on them), which
+// wins over their old verdict unless the PR is approved anyway.
+function reviewOf(node) {
+  const author = node.author?.login;
+  const reviewers = reviewsByAuthor(node).filter((r) => r.who !== author);
+  const askedAt = askedAtOf(node);
+  const decision = node.reviewDecision
+    || (reviewers.some((r) => r.state === "CHANGES_REQUESTED") ? "CHANGES_REQUESTED" : reviewers.some((r) => r.state === "APPROVED") ? "APPROVED" : "REVIEW_REQUIRED");
+  const askedAgain = reviewers.filter((r) => askedAt.get(r.who) > r.at).map((r) => ({ who: r.who, was: r.state, at: askedAt.get(r.who) }));
+  return { review: askedAgain.length && decision !== "APPROVED" ? "REREQUESTED" : decision, decision, askedAgain, reviewers };
 }
 
 function toPr(node, me) {
   return {
     ...myReviewOf(node, me),
+    ...reviewOf(node),
     repo: node.repository.name,
     number: node.number,
     title: node.title,
     url: node.url,
     draft: node.isDraft,
-    review: node.reviewDecision ?? "",
     checks: node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? "",
     branch: node.headRefName,
     author: node.author?.login ?? "",
@@ -286,6 +343,7 @@ async function fetchPrs() {
   const review = data.review.nodes.map((n) => toPr(n, me));
   const asked = new Set(review.map((p) => p.url));
   return {
+    me,
     mine: data.mine.nodes.map((n) => toPr(n, me)),
     review,
     // Open PRs I reviewed that are not waiting on me again.
@@ -317,10 +375,53 @@ export async function refresh({ force = false } = {}) {
     mine: prs?.mine ?? last?.mine ?? [],
     review: prs?.review ?? last?.review ?? [],
     reviewed: prs?.reviewed ?? last?.reviewed ?? [],
+    ghMe: prs?.me ?? last?.ghMe ?? null,
     errors,
   });
   setShared(BUSY, 0);
   if (jiraData) pruneMoves(now);
+}
+
+// The PR actions in the rail's dropdown, through gh. Merge uses a merge commit, as the team does.
+const PR_ACTIONS = {
+  merge: (url) => ["pr", "merge", url, "--merge"],
+  close: (url) => ["pr", "close", url],
+  draft: (url) => ["pr", "ready", url, "--undo"],
+  ready: (url) => ["pr", "ready", url],
+};
+
+// Patches the snapshot at once (refresh skips while another fetch runs), then refetches.
+export async function prAction(url, kind) {
+  const r = await exec("gh", PR_ACTIONS[kind](url));
+  if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().slice(0, 200) || `gh exited ${r.code}`);
+  const snap = snapshot();
+  if (snap) {
+    const gone = kind === "merge" || kind === "close";
+    const patch = (list) => (gone ? list.filter((p) => p.url !== url) : list.map((p) => (p.url === url ? { ...p, draft: kind === "draft" } : p)));
+    setShared(KEY, { ...snap, mine: patch(snap.mine), review: patch(snap.review), reviewed: patch(snap.reviewed) });
+  }
+  setShared(PR_CHANGED, { url, at: Date.now() });
+  refresh({ force: true }).catch(() => {});
+}
+
+const ALL_PAGES = 3; // up to 300 open PRs per owner
+
+// The All PRs tab's data for `owner`: an organization's login, or the viewer's own (their repos).
+export async function fetchAllPrs(owner, me) {
+  const scope = me && owner === me ? `user:${owner}` : `org:${owner}`;
+  let after = null, prs = [], total = 0, viewer = null;
+  for (let page = 0; page < ALL_PAGES; page++) {
+    const data = await graphql(ALL_QUERY, { q: `is:pr is:open archived:false ${scope} sort:updated-desc`, after });
+    viewer = data.viewer;
+    prs = prs.concat(data.search.nodes.filter((n) => n?.url).map((n) => toPr(n, viewer.login)));
+    total = data.search.issueCount;
+    if (!data.search.pageInfo.hasNextPage) break;
+    after = data.search.pageInfo.endCursor;
+  }
+  const owners = [viewer.login, ...viewer.organizations.nodes.map((o) => o.login)];
+  const result = { owner, at: Date.now(), prs, total, owners, me: viewer.login };
+  setShared(ALL_PRS, result);
+  return result;
 }
 
 export function openUrl(url) {

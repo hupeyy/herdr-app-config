@@ -4,7 +4,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, TextareaState } from "gpui-base";
-import { spaces, focused, panes, props, theme, layout, closeOverlay, run, shared, setShared, settings } from "herdr";
+import { spaces, focused, panes, props, theme, layout, closeOverlay, openOverlay, notify, run, shared, setShared, settings } from "herdr";
 
 // One board at a time. An open board holds a lease in shared("tasks.board"), renewed every 15 s
 // and cleared by close(); a crash that skips close() lets it lapse after 40 s. The rail never
@@ -17,14 +17,16 @@ const OPEN = "tasks.open";
 const tabId = (x) => (x.kind === "ticket" ? `t:${x.key}` : `p:${x.url}`);
 const BOARD_LEASE_MS = 40000;
 const boardOpen = () => Date.now() - (shared(BOARD)?.at ?? 0) < BOARD_LEASE_MS;
-import { POLL_MS, STALE_MS, snapshot, refresh, forBranch, withMoves, moveTicket } from "./data.js";
+import { POLL_MS, STALE_MS, snapshot, refresh, forBranch, withMoves, moveTicket, prAction } from "./data.js";
 import { ticketDrawer, prPage } from "./detail.js";
 import { toolbar, jiraBody } from "./jira.js";
 import { ink, onFill, contrast } from "./colors.js";
 import { brand } from "./brand.js";
+import { PR_ACTIONS, prActions, ownMenu, openPrMenu } from "./pr-menu.js";
+import { PRESETS, setPrPrefs, prData, filteredPrs, prGroupsOf, prToolbar } from "./prs.js";
 
 // Which mark a board tab and a rail section carry.
-const TAB_BRAND = { jira: "jira", mine: "github", review: "github" };
+const TAB_BRAND = { jira: "jira", prs: "github" };
 
 // The surface this render draws on (rail: chrome, board: popover), for readable status text.
 // Set at the start of each render, which runs to the end before another copy renders.
@@ -35,10 +37,18 @@ const blue = (bg) => (contrast("#58A6FF", bg) >= 3 ? "#58A6FF" : "#0969DA");
 
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 const CI = { SUCCESS: ["✓", "passing", "done"], FAILURE: ["✗", "failing", "blocked"], ERROR: ["✗", "error", "blocked"], PENDING: ["●", "running", "working"], EXPECTED: ["●", "waiting", "working"] };
-const REVIEW = { APPROVED: ["approved", "done"], CHANGES_REQUESTED: ["changes", "blocked"], REVIEW_REQUIRED: ["review", "muted"] };
+// A PR's review state as an icon (a word too on the board): [icon, word, tone].
+const TASK_ICON = (name) => `mods/tasks/icons/${name}.svg`;
+const REVIEW = {
+  APPROVED: [ICON("circle-check"), "approved", "done"],
+  CHANGES_REQUESTED: [TASK_ICON("file-diff"), "changes", "blocked"],
+  REREQUESTED: [TASK_ICON("refresh-cw"), "re-requested", "working"],
+  REVIEW_REQUIRED: [TASK_ICON("eye"), "in review", "muted"],
+  DRAFT: [ICON("square-pen"), "draft", "dim"],
+};
 const CATEGORY = { indeterminate: "working", done: "done", new: "muted" };
 const CATEGORY_ORDER = { indeterminate: 0, new: 1, done: 2 };
-const TABS = [["jira", "Jira"], ["mine", "My PRs"], ["review", "Review requests"], ["here", "This space"]];
+const TABS = [["jira", "Jira"], ["prs", "GitHub"]];
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -84,9 +94,29 @@ const ciBadge = (t, pr, long) => {
   return div().flex_none().text_color(ink(t, tone, paper)).child(long ? (glyph ? `${glyph} ${word}` : "") : glyph);
 };
 
-const reviewBadge = (t, pr) => {
-  const [word, tone] = pr.draft ? ["draft", "dim"] : REVIEW[pr.review] ?? ["", "dim"];
-  return div().flex_none().text_color(ink(t, tone, paper)).child(word);
+const names = (list) => list.map((x) => x.who).join(", ");
+
+// Who and when, for the badge's tooltip.
+function reviewTip(pr, state) {
+  const by = (s) => (pr.reviewers ?? []).filter((r) => r.state === s);
+  if (state === "DRAFT") return "Draft: not ready for review";
+  if (state === "APPROVED") return by("APPROVED").length ? `Approved by ${names(by("APPROVED"))}` : "Approved";
+  if (state === "CHANGES_REQUESTED") return `Changes requested${by("CHANGES_REQUESTED").length ? ` by ${names(by("CHANGES_REQUESTED"))}` : ""}`;
+  if (state === "REREQUESTED") {
+    return `Review requested again from ${pr.askedAgain.map((a) => `${a.who} (${a.was === "CHANGES_REQUESTED" ? "asked for changes" : a.was.toLowerCase()} before), on ${day(a.at)}`).join("; ")}. Waiting on them.`;
+  }
+  return "Waiting for review";
+}
+
+// The rail shows the icon alone; the board (long) adds the word.
+const reviewBadge = (t, pr, long) => {
+  const state = pr.draft ? "DRAFT" : pr.review || "REVIEW_REQUIRED";
+  const [icon, word, tone] = REVIEW[state] ?? REVIEW.REVIEW_REQUIRED;
+  const tip = reviewTip(pr, state);
+  return h_flex().id(`rv-${pr.url}`).flex_none().gap(5).items_center().text_color(ink(t, tone, paper))
+    .role("image").accessibility_label(tip).tooltip(tip)
+    .child(svg(icon).size(13).flex_none())
+    .when(Boolean(long), (el) => el.child(div().text_size(11.5).child(word)));
 };
 
 // My own review on a PR someone else wrote: re-requested (asked again after I reviewed) wins over
@@ -109,9 +139,17 @@ const myReviewBadge = (t, pr, long) => {
 
 export default class Tasks extends View {
   init(_props, cx) {
+    // The PR actions popup is this mod too; it must not take the board path (focus, board lease).
+    this.prMenu = props()?.prMenu ?? null;
+    if (this.prMenu) {
+      this.at = 0;
+      this.handle = cx.focus_handle();
+      this.handle.focus();
+      return;
+    }
     this.rail = props()?.view === "rail";
     this.tab = "jira";
-    this.folded = new Set(["rail-sprint", "gh-reviewed"]);
+    this.folded = new Set(["rail-sprint"]);
     this.foldedDone = false;
     if (!this.rail) {
       this.handle = cx.focus_handle();
@@ -121,6 +159,10 @@ export default class Tasks extends View {
       // Board shortcuts pause while typing, so "r" in a search does not refresh.
       this.search.on("focus", (_e, cx) => { this.searchFocused = true; cx.notify(); });
       this.search.on("blur", (_e, cx) => { this.searchFocused = false; cx.notify(); });
+      this.prSearch = InputState.new({ placeholder: "Search #, title, branch, ticket or author   ( / )" });
+      this.prSearch.on("change", (_e, cx) => cx.notify());
+      this.prSearch.on("focus", (_e, cx) => { this.searchFocused = true; cx.notify(); });
+      this.prSearch.on("blur", (_e, cx) => { this.searchFocused = false; cx.notify(); });
       this.comment = TextareaState.new({ placeholder: "Add a Jira comment…", rows: 3 });
       this.comment.on("focus", (_e, cx) => { this.searchFocused = true; cx.notify(); });
       this.comment.on("blur", (_e, cx) => { this.searchFocused = false; cx.notify(); });
@@ -171,6 +213,7 @@ export default class Tasks extends View {
   takeRequest(target) {
     if (target?.workspace) this.keepWorkspace(target.workspace);
     if (target?.targets) this.openTabs(target.targets.map((x) => ({ ...x, workspace: target.workspace })));
+    else if (target?.tab && PRESETS[target.tab]) { setPrPrefs(PRESETS[target.tab]); this.tab = "prs"; this.detail = null; }
     else if (target?.tab) { this.tab = target.tab; this.detail = null; }
     else if (target?.kind) this.openTabs([target]);
   }
@@ -266,7 +309,7 @@ export default class Tasks extends View {
   }
 
   async close() {
-    if (!this.rail && shared(BOARD)?.overlay === (props()?.overlay ?? null)) setShared(BOARD, null);
+    if (!this.rail && !this.prMenu && shared(BOARD)?.overlay === (props()?.overlay ?? null)) setShared(BOARD, null);
   }
 
   openDetail(target, cx) {
@@ -279,11 +322,20 @@ export default class Tasks extends View {
     else { this.openTabs([target]); cx.notify(); }
   }
 
-  row(t, id, target, cells) {
+  row(t, id, target, cells, menu) {
     return h_flex().id(id).px(8).h(26).flex_none().gap(8).items_center().rounded(7)
       .cursor_pointer().hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => this.openDetail(target, cx))
       .children(cells)
+      .when(Boolean(menu), (el) => el.child(div().id(`${id}-menu`).flex_none().p(2).rounded(4).text_color(t.dim).tooltip("PR actions")
+        .role("button").accessibility_label(`Actions for #${menu.number}`)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_mouse_down("left", (e) => { this.menuBounds = e.bounds ?? null; })
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          openPrMenu(menu, this.menuBounds);
+        })
+        .child(svg(ICON("chevron-down")).size(12))))
       .child(div().id(`${id}-web`).flex_none().p(2).rounded(4).opacity(0.75).tooltip(target.kind === "pr" ? "Open in GitHub" : "Open in Jira")
         .hover((s) => s.opacity(1).bg(t.hover))
         .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url(target.url); })
@@ -464,102 +516,67 @@ export default class Tasks extends View {
   }
 
   renderGithubRail(t, snap) {
+    // Two lists only: my PRs, and other people's PRs waiting on my review. Both show each PR's review
+    // state as the same icons; a request also names its author.
     const branch = currentBranch();
-    const here = forBranch(snap, branch);
-    const onBranch = new Set(here.prs.map((p) => p.url));
-    const requests = (snap?.review ?? []).filter((p) => !onBranch.has(p.url));
-    const rerequested = requests.filter((p) => p.rerequested);
-    const review = requests.filter((p) => !p.rerequested);
-    const reviewed = (snap?.reviewed ?? []).filter((p) => !onBranch.has(p.url));
-    const mine = (snap?.mine ?? []).filter((p) => !onBranch.has(p.url));
+    const mine = snap?.mine ?? [];
+    const requests = snap?.review ?? [];
     if (narrow(this.railWidth)) {
-      return this.compactRail(t, "github", "mine", [[rerequested.length, "working", "Re-requested"], [review.length, "blocked", "Review requests"], [mine.length, "foreground", "My PRs"]]);
+      return this.compactRail(t, "github", "mine", [[mine.length, "foreground", "My PRs"], [requests.length, "blocked", "Review requests"]]);
     }
     const prRow = (prefix, withAuthor) => (pr) => this.row(t, `${prefix}-${pr.url}`, { kind: "pr", url: pr.url }, [
       ciBadge(t, pr, false),
       div().flex_none().text_color(pr.branch === branch ? ink(t, "accent", paper) : t.dim).child(`#${pr.number}`),
       div().flex_1().min_w(0).truncate().text_color(pr.draft ? t.muted : t.foreground).tooltip(`${pr.repo} #${pr.number}  ${pr.title}`).child(pr.title),
-      ...(withAuthor ? [myReviewBadge(t, pr, false), div().flex_none().max_w(90).truncate().text_color(t.muted).child(pr.author)] : [reviewBadge(t, pr)]),
+      ...(withAuthor ? [div().flex_none().max_w(90).truncate().text_color(t.muted).child(pr.author)] : []),
+      reviewBadge(t, pr),
     ]);
-    // My PRs under one header, with a repo label above each repo's rows once they span more than one.
-    const repos = [...new Set(mine.map((p) => p.repo))].sort((a, b) => a.localeCompare(b));
-    const repoLabel = (repo) => div().id(`gh-repo-${repo}`).px(8).pt(6).h(22).flex_none().text_size(11).text_color(t.dim).child(repo);
-    const mineRows = !mine.length ? [] : [
-      this.header(t, "gh-mine", "My PRs", mine.length, "blue"),
-      ...(this.folded.has("gh-mine") ? [] : repos.flatMap((repo) => [
-        ...(repos.length > 1 ? [repoLabel(repo)] : []),
-        ...mine.filter((p) => p.repo === repo).map(prRow("gm", false)),
-      ])),
-    ];
+    // One header per list, with a repo label above each repo's rows once they span more than one.
+    const repoLabel = (id, repo) => div().id(`${id}-repo-${repo}`).px(8).pt(6).h(22).flex_none().text_size(11).text_color(t.dim).child(repo);
+    const list = (id, label, prs, tone, withAuthor) => {
+      if (!prs.length) return [];
+      const repos = [...new Set(prs.map((p) => p.repo))].sort((a, b) => a.localeCompare(b));
+      return [
+        this.header(t, id, label, prs.length, tone),
+        ...(this.folded.has(id) ? [] : repos.flatMap((repo) => [
+          ...(repos.length > 1 ? [repoLabel(id, repo)] : []),
+          ...prs.filter((p) => p.repo === repo).map(prRow(id, withAuthor)),
+        ])),
+      ];
+    };
     const rows = [
-      ...this.railSection(t, "gh-here", here.key ?? "This branch", here.prs, "accent", prRow("gh", false)),
-      ...this.railSection(t, "gh-rere", "Re-requested", rerequested, "working", prRow("gq", true)),
-      ...this.railSection(t, "gh-review", "Review requests", review, "blocked", prRow("gr", true)),
-      ...mineRows,
-      ...this.railSection(t, "gh-reviewed", "Reviewed by me", reviewed, "done", prRow("gd", true)),
+      ...list("gh-mine", "My PRs", mine, "blue", false),
+      ...list("gh-review", "Review requests", requests, "blocked", true),
     ];
     return this.railFrame(t, snap, "github", "GitHub", null, "mine", rows, "No open PRs or review requests.");
   }
 
   // ---- Board: the full Orca-style view ----
 
-  prGroups(t, prs, withAuthor) {
-    const byRepo = new Map();
-    for (const pr of prs) byRepo.set(pr.repo, [...(byRepo.get(pr.repo) ?? []), pr]);
-    return [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([repo, items]) => ({
-      id: `repo-${withAuthor ? "rv" : "mn"}-${repo}`, label: repo, tone: null, items,
-      draw: (pr) => this.row(t, `pr-${withAuthor ? "rv" : "mn"}-${pr.url}`, { kind: "pr", url: pr.url }, [
-        div().w(52).flex_none().text_color(t.dim).child(`#${pr.number}`),
-        div().w(96).flex_none().text_color(t.dim).child(pr.ticket ?? ""),
-        div().w(84).flex_none().child(ciBadge(t, pr, true)),
-        div().w(72).flex_none().child(reviewBadge(t, pr)),
-        ...(withAuthor ? [div().w(150).flex_none().child(myReviewBadge(t, pr, true)), div().w(90).flex_none().truncate().text_color(t.muted).child(pr.author)] : []),
-        div().flex_1().min_w(0).truncate().text_color(t.foreground).child(pr.title),
-      ]),
-    }));
-  }
-
-  // Review requests: re-requested ones first (one group), new ones by repo, then the open PRs I
-  // already reviewed that are not waiting on me.
-  reviewGroups(t, snap) {
-    const requests = snap?.review ?? [];
-    const flat = (id, label, tone, items) => (items.length
-      ? [{ ...this.prGroups(t, items, true)[0], id, label, tone, items }] : []);
-    return [
-      ...flat("rv-rere", "Re-requested", "working", requests.filter((p) => p.rerequested)),
-      ...this.prGroups(t, requests.filter((p) => !p.rerequested), true),
-      ...flat("rv-done", "Reviewed by me", "done", snap?.reviewed ?? []),
-    ];
-  }
-
-  hereGroups(t, snap) {
-    const branch = currentBranch();
-    const here = forBranch(snap, branch);
-    const items = [...(here.ticket ? [{ kind: "ticket", ...here.ticket }] : []), ...here.prs.map((p) => ({ kind: "pr", ...p }))];
-    return [{
-      id: "here", label: here.key ?? `No ticket on ${branch ?? "this space"}`, tone: "accent", items,
-      draw: (x) => x.kind === "ticket"
-        ? this.row(t, "here-t", { kind: "ticket", key: x.key, url: x.url }, [
-            div().w(140).flex_none().text_color(t.dim).child(x.key),
-            pill(t, x.status, CATEGORY[x.category]),
-            div().flex_1().min_w(0).truncate().text_color(t.foreground).child(x.summary)])
-        : this.row(t, `here-${x.url}`, { kind: "pr", url: x.url }, [
-            div().w(140).flex_none().text_color(t.dim).child(`${x.repo} #${x.number}`),
-            div().w(84).flex_none().text_color(x.branch === branch ? ink(t, "accent", paper) : t.dim).child(x.branch === branch ? "this branch" : "same ticket"),
-            div().w(84).flex_none().child(ciBadge(t, x, true)),
-            div().w(72).flex_none().child(reviewBadge(t, x)),
-            div().flex_1().min_w(0).truncate().text_color(t.foreground).child(x.title)]),
-    }];
+  // The Pull requests tab: one owner's open PRs through prs.js's filters, grouped as chosen.
+  prTabGroups(t, snap, cx) {
+    const { data, me } = prData(this, cx);
+    if (!data) return [];
+    // The repo column only matters when the groups are not repos already.
+    return prGroupsOf(filteredPrs(this, snap, data, me)).map((g) => ({ ...g, draw: (pr) => this.row(t, `pr-${pr.url}`, { kind: "pr", url: pr.url }, [
+      div().w(52).flex_none().text_color(t.dim).child(`#${pr.number}`),
+      ...(g.id.startsWith("prs-repo-") ? [] : [div().w(120).flex_none().truncate().text_color(t.muted).child(pr.repo)]),
+      div().w(96).flex_none().text_color(t.dim).child(pr.ticket ?? ""),
+      div().w(84).flex_none().child(ciBadge(t, pr, true)),
+      div().w(112).flex_none().child(reviewBadge(t, pr, true)),
+      div().w(150).flex_none().child(myReviewBadge(t, pr, true)),
+      div().w(90).flex_none().truncate().text_color(pr.author === me ? t.foreground : t.muted).child(pr.author === me ? "you" : pr.author),
+      div().flex_1().min_w(0).truncate().text_color(pr.draft ? t.muted : t.foreground).child(pr.title),
+    ], ownMenu(me, pr)) }));
   }
 
   renderBoard(t, snap, cx) {
     const groups = {
       jira: () => [],
-      mine: () => this.prGroups(t, snap?.mine ?? [], false),
-      review: () => this.reviewGroups(t, snap),
-      here: () => this.hereGroups(t, snap),
-    }[this.tab]();
-    const counts = { jira: snap?.tickets.filter((x) => x.mine).length, mine: snap?.mine.length, review: snap?.review.length };
+      prs: () => this.prTabGroups(t, snap, cx),
+    }[this.tab]?.() ?? [];
+    const prs = this.tab === "prs" ? groups.reduce((n, g) => n + g.items.length, 0) : null;
+    const counts = { jira: snap?.tickets.filter((x) => x.mine).length, prs };
     const rows = groups.flatMap((g) => [
       this.header(t, g.id, g.label, g.items.length, g.tone),
       ...(this.folded.has(g.id) ? [] : g.items.map(g.draw)),
@@ -574,7 +591,7 @@ export default class Tasks extends View {
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Tasks"))
         .child(div().flex_1().text_size(11.5).text_color(snap?.errors?.length ? ink(t, "blocked", paper) : t.dim)
           .child(snap?.errors?.length ? snap.errors.join("  ·  ") : `Updated ${age(snap)}`))
-        .child(div().text_size(11).text_color(t.dim).child("1-4 tabs · / search · r refresh · Esc")))
+        .child(div().text_size(11).text_color(t.dim).child("1-2 tabs · / search · r refresh · Esc")))
       .child(h_flex().px(14).h(34).flex_none().gap(2).items_center().border_b(1).border_color(t.border)
         .children(TABS.map(([id, label], i) => h_flex().id(`tab-${id}`).px(10).h(26).gap(6).items_center().rounded(7)
           .cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted)
@@ -588,6 +605,7 @@ export default class Tasks extends View {
       .child(h_flex().flex_1().min_h(0)
         .child(v_flex().flex_1().min_w(0).h_full().min_h(0)
           .when(this.tab === "jira", (el) => el.child(toolbar(this, t, snap)).child(div().flex_1().min_h(0).pt(6).child(jiraBody(this, t, snap))))
+          .when(this.tab === "prs", (el) => el.child(prToolbar(this, t, cx, snap)))
           .when(this.tab !== "jira", (el) => el.child(v_flex().id("board-list").flex_1().min_h(0).px(10).pb(10).overflow_y_scrollbar()
             .when(!snap, (el) => el.child(div().p(12).text_color(t.dim).child("Loading Jira and GitHub…")))
             .children(rows)))));
@@ -599,12 +617,13 @@ export default class Tasks extends View {
     return v_flex().id("tasks-board").track_focus(this.handle).size_full().min_h(0).bg(t.popover).text_size(13)
       .on_size_change((size, cx) => { this.size = size; cx.notify(); })
       .on_key_down((e, cx) => {
-        const i = ["1", "2", "3", "4"].indexOf(e.key);
+        const i = ["1", "2"].indexOf(e.key);
         if (e.key === "escape" && this.searchFocused) this.handle.focus();
         else if (this.searchFocused) return;
         else if (e.key === "escape" && this.detail) this.detail = null;
         else if (e.key === "escape") close();
         else if (this.detail?.kind === "pr") return;
+        else if (e.key === "/" && this.tab === "prs") this.prSearch.focus();
         else if (e.key === "/") { this.tab = "jira"; this.search.focus(); }
         else if (i >= 0) this.tab = TABS[i][0];
         else if (e.key === "r") this.reload(cx);
@@ -614,8 +633,62 @@ export default class Tasks extends View {
       });
   }
 
+  // ---- PR actions popup (this mod opened with props.prMenu) ----
+
+  // gh runs while the popup stays open; the popup closes on the result.
+  choosePr(kind, cx) {
+    const pr = this.prMenu;
+    const a = PR_ACTIONS[kind];
+    if (this.busy) return;
+    if (a.confirm && this.confirming !== kind) { this.confirming = kind; cx.notify(); return; }
+    this.busy = kind;
+    cx.notify();
+    cx.spawn(async () => {
+      try {
+        await prAction(pr.url, kind);
+        notify({ title: `${a.done} #${pr.number}`, body: pr.title, level: "success", timeout: 3000 });
+      } catch (e) {
+        notify({ title: `${a.label} failed on #${pr.number}`, body: String(e.message ?? e), level: "error" });
+      }
+      closeOverlay(props()?.overlay);
+    });
+  }
+
+  renderPrMenu(t) {
+    const pr = this.prMenu;
+    const list = prActions(pr);
+    return v_flex().id("pr-menu").track_focus(this.handle).w_full().min_h(0).p(5).bg(t.popover).text_size(12.8)
+      .on_key_down((e, cx) => {
+        if (this.busy) return;
+        if (e.key === "down") this.at = (this.at + 1) % list.length;
+        else if (e.key === "up") this.at = (this.at + list.length - 1) % list.length;
+        else if (e.key === "enter") this.choosePr(list[this.at], cx);
+        else if (e.key === "escape" && this.confirming) this.confirming = null;
+        else if (e.key === "escape") closeOverlay(props()?.overlay);
+        else return;
+        cx.stop_propagation();
+        cx.notify();
+      })
+      .child(div().px(8).h(28).flex().items_center().text_size(11.5).text_color(t.dim).truncate().child(`${pr.repo} #${pr.number}  ${pr.title}`))
+      .children(list.map((kind, i) => {
+        const a = PR_ACTIONS[kind];
+        const confirming = this.confirming === kind;
+        const danger = confirming && kind === "close";
+        const tone = danger ? ink(t, "blocked", t.popover) : null;
+        const label = this.busy === kind ? `${a.busy}…` : confirming ? `Confirm: ${a.label.toLowerCase()} #${pr.number}` : a.label;
+        return h_flex().id(`pm-${kind}`).h(31).px(8).gap(9).rounded(7).items_center()
+          .text_color(tone ?? t.foreground)
+          .when(i === this.at || confirming, (el) => el.bg(t.selected))
+          .when(Boolean(this.busy) && this.busy !== kind, (el) => el.opacity(0.5))
+          .when(!this.busy, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.at = i; this.choosePr(kind, cx); }))
+          .child(svg(ICON(this.busy === kind ? "spinner" : a.icon)).size(14).flex_none().text_color(tone ?? t.muted))
+          .child(div().flex_1().truncate().child(label));
+      }));
+  }
+
   render(cx) {
     const t = theme();
+    if (this.prMenu) return this.renderPrMenu(t);
     const snap = snapshot();
     const request = this.rail ? null : shared(REQUEST);
     if (request && request.at > this.seenRequest) {
