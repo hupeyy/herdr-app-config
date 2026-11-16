@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, terminals, run, openOverlay, theme, window, shared, layout, settings, knownAgents } from "herdr";
+import { spaces, panes, terminals, run, openOverlay, theme, window, shared, setShared, layout, settings, knownAgents, exec, home, watchFolder, checking } from "herdr";
 
 // Claude started from a shell reports itself (OSC 7501) only while it works, so its pane shows
 // the shell. The herdr-resume hook labels the terminal claude.session from start to exit.
@@ -30,6 +30,16 @@ export default class Tabs extends View {
     cx.spawn(async (cx) => {
       try { this.agentCount = (await knownAgents()).filter((a) => a.installed).length; } catch {}
       cx.notify();
+    });
+    // Waiting learn-swe questions for the Learn button; the learn pane also sets this when shown.
+    if (!checking()) cx.spawn(async (cx) => {
+      const learn = `${home()}/.claude/learning`;
+      for (;;) {
+        const r = await exec("node", [`${learn}/learn.mjs`, "count"]).catch(() => null);
+        if (r?.code === 0) setShared("learn.open", Number(r.stdout.trim()) || 0);
+        // A rejected watch (no inbox folder) would spin; stop instead.
+        if ((await watchFolder(`${learn}/inbox`).catch(() => null)) === null) return;
+      }
     });
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
     // Changes became Jira and Tasks became GitHub: saved choices follow the rename.
@@ -98,7 +108,7 @@ export default class Tabs extends View {
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
     // Jira and GitHub (both mods/tasks rails) always ride along with Files when the welcome picked it.
-    const enabled = [...(shared("workspace.panels") ?? ["files"]).filter((id) => id === "files"), "jira", "github"];
+    const enabled = [...(shared("workspace.panels") ?? ["files"]).filter((id) => id === "files"), "jira", "github", "learn"];
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon, color) => {
       const on = panel && !panel.hidden && body?.active === id;
@@ -122,6 +132,9 @@ export default class Tabs extends View {
       .child(div().flex_1())
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .child(panelButton("jira", "Jira", "mods/file-icons/brand/jira.svg", JIRA_BLUE))
-      .child(panelButton("github", "GitHub", "mods/file-icons/brand/github.svg"));
+      .child(panelButton("github", "GitHub", "mods/file-icons/brand/github.svg"))
+      .child(panelButton("learn", "Learn", "mods/learn/learn.svg")
+        .when((shared("learn.open") ?? 0) > 0, (el) => el.child(div().px(5).h(16).flex().items_center().rounded(8)
+          .bg(t.accent).text_color(t.accent_foreground).text_size(10.5).child(String(shared("learn.open"))))));
   }
 }
