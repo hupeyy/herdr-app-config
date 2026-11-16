@@ -2,14 +2,18 @@
 // streams through hx/browser.mjs (the daemon) and sends clicks, scrolling and keys back.
 // Agents drive the same page with `hx browser ...`. props: { id?, url? }; the page this pane
 // shows is kept in shared "browser.tabs" { paneId: { id, url, title } } so it survives restarts.
+// The console panel, observe-only mode and recording follow herdr-browser (StructuPath, MIT).
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { props, theme, panes, spaces, shared, setShared, run, exec, home } from "herdr";
+import { props, theme, panes, spaces, shared, setShared, run, exec, home, notify } from "herdr";
 
 const DAEMON = "http://127.0.0.1:9334";
 const TABS = "browser.tabs";
 const HX = `${home()}/.config/herdr-app/hx/hx.mjs`;
+const CONSOLE_LINES = 200; // kept in the panel
+const FRAMES_UNDER = 3; // older frames drawn under the newest (the daemon keeps 3 s of files)
+const LEVEL = { error: ["✖", "blocked"], warn: ["⚠", "working"] };
 
 async function call(path, body) {
   const res = await fetch(`${DAEMON}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
@@ -43,6 +47,13 @@ export default class Browser extends View {
     this.seq = 0;
     this.frame = null;
     this.queue = [];
+    // Observe only: clicks and keys stay out of the page, so watching an agent cannot disturb it.
+    this.observe = false;
+    this.consoleOpen = false;
+    this.logs = [];
+    this.logSeq = 0;
+    this.errors = 0;
+    this.recording = null;
     this.handle = cx.focus_handle();
     this.address = InputState.new({ placeholder: "Search or enter an address", value: this.url === "about:blank" ? "" : this.url });
     this.address.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
@@ -86,8 +97,12 @@ export default class Browser extends View {
   apply(f, cx) {
     const moved = f.id !== this.id || f.url !== this.url || f.title !== this.title;
     this.id = f.id; this.seq = f.seq; this.loading = f.loading; this.error = null;
-    // The last frame stays drawn under the new one: an image draws nothing while it loads.
-    if (f.frame && f.frame !== this.frame) { this.under = this.frame; this.frame = f.frame; }
+    this.errors = f.errors ?? 0;
+    this.recording = f.recording ?? null;
+    if (this.consoleOpen && (f.logSeq ?? 0) > this.logSeq) this.readConsole(cx);
+    // image() draws nothing while it loads and has no load event, so the last frames stay stacked
+    // under the newest (oldest at the bottom): one of them is always decoded.
+    if (f.frame && f.frame !== this.frame) { this.under = [...(this.under ?? []), this.frame].filter(Boolean).slice(-FRAMES_UNDER); this.frame = f.frame; }
     if (f.url !== this.url) { this.url = f.url; if (!this.typing) this.address.set_value(f.url === "about:blank" ? "" : f.url); }
     if (f.title !== this.title) { this.renameTab(this.title, f.title); this.title = f.title; }
     if (moved) this.remember();
@@ -127,9 +142,43 @@ export default class Browser extends View {
     });
   }
 
+  readConsole(cx, clear = false) {
+    if (!this.id || this.readingConsole) return;
+    this.readingConsole = true;
+    cx.spawn(async (cx) => {
+      try {
+        const r = await call("/console", { id: this.id, after: clear ? 0 : this.logSeq, clear });
+        this.logs = clear ? [] : [...this.logs, ...r.lines].slice(-CONSOLE_LINES);
+        this.logSeq = r.logSeq;
+        this.errors = r.errors;
+      } catch (e) { this.error = e.message; }
+      this.readingConsole = false;
+      cx.notify();
+    });
+  }
+
+  toggleConsole(cx) {
+    this.consoleOpen = !this.consoleOpen;
+    if (this.consoleOpen) { this.logs = []; this.logSeq = 0; this.readConsole(cx); }
+    cx.notify();
+  }
+
+  record(cx) {
+    if (!this.id) return;
+    const action = this.recording ? "stop" : "start";
+    cx.spawn(async (cx) => {
+      try {
+        const r = await call("/record", { id: this.id, action });
+        this.recording = r.recording ?? null;
+        if (action === "stop") notify({ title: "Recording saved", body: `${r.path} (${r.seconds}s)`, level: "success" });
+      } catch (e) { notify({ title: `Recording ${action === "stop" ? "not saved" : "did not start"}`, body: e.message, level: "error" }); }
+      cx.notify();
+    });
+  }
+
   // Events go out in order, one request at a time; a run of mouse moves keeps only the last.
   send(event, cx) {
-    if (!this.id) return;
+    if (!this.id || this.observe) return;
     const last = this.queue[this.queue.length - 1];
     if (event.action === "move" && last?.action === "move") this.queue[this.queue.length - 1] = event;
     else this.queue.push(event);
@@ -163,7 +212,7 @@ export default class Browser extends View {
   }
 
   onKey(e, cx) {
-    if (this.typing) return;
+    if (this.typing || this.observe) return;
     const m = e.modifiers ?? {};
     // ctrl-shift chords stay with herdr (its own bindings), and so does ctrl-l (focus the address).
     if (m.control && m.shift) return;
@@ -186,6 +235,14 @@ export default class Browser extends View {
       .child(h_flex().flex_1().min_w(0).h(26).mx(4).px(10).items_center().rounded(13).bg(t.background).border(1)
         .border_color(this.typing ? t.accent : t.border)
         .child(Input.new(this.address).flex_1().h_full().text_size(12.5).text_color(t.foreground)))
+      .child(button("observe", "👁", this.observe ? "Observe only: clicks and keys stay out of the page. Click to interact." : "Observe only (watch without touching the page)",
+        (cx) => { this.observe = !this.observe; cx.notify(); }).when(this.observe, (el) => el.bg(t.selected).text_color(t.accent)))
+      .child(button("record", "●", this.recording ? "Stop recording and save a GIF" : "Record this page (saves a GIF)", (cx) => this.record(cx))
+        .when(Boolean(this.recording), (el) => el.text_color(t.blocked ?? "#e5534b").bg(t.selected)))
+      .child(div().relative().child(button("console", "≡", this.errors ? `Console: ${this.errors} error${this.errors === 1 ? "" : "s"}` : "Console", (cx) => this.toggleConsole(cx))
+        .when(this.consoleOpen, (el) => el.bg(t.selected).text_color(t.foreground)))
+        .when(this.errors > 0, (el) => el.child(div().absolute().top(1).right(0).min_w(13).h(13).px(3).rounded(7).flex().items_center().justify_center()
+          .bg(t.blocked ?? "#e5534b").text_color("#ffffff").text_size(9).font_medium().child(this.errors > 99 ? "99+" : String(this.errors)))))
       .child(button("external", "↗", "Open in your browser", (cx) => this.url && cx.open_url(this.url), /^https?:/.test(this.url ?? "")));
     const viewport = div().id("viewport").flex_1().min_h(0).relative().overflow_hidden().bg("#ffffff")
       .on_size_change((size, cx) => {
@@ -201,7 +258,7 @@ export default class Browser extends View {
       .on_mouse_move((e, cx) => this.send({ type: "mouse", action: "move", ...this.point(e), buttons: this.dragging ? 1 : 0 }, cx))
       // GPUI's delta is positive when scrolling up; Chrome's is positive scrolling down.
       .on_scroll_wheel((e, cx) => this.send({ type: "wheel", ...this.point(e), dx: -(e.delta?.x ?? 0), dy: -(e.delta?.y ?? 0) }, cx))
-      .when(Boolean(this.under), (el) => el.child(image(this.under).absolute().top(0).left(0).size_full()))
+      .children((this.under ?? []).map((path) => image(path).absolute().top(0).left(0).size_full()))
       .when(Boolean(this.frame), (el) => el.child(image(this.frame).absolute().top(0).left(0).size_full()))
       .when(!this.frame, (el) => el.child(div().size_full().flex().items_center().justify_center().bg(t.background).text_color(t.dim)
         .child(this.error ? `Browser: ${this.error}` : "Starting the browser…")))
@@ -210,6 +267,25 @@ export default class Browser extends View {
       .on_key_down((e, cx) => this.onKey(e, cx))
       .child(toolbar)
       .when(Boolean(this.error && this.frame), (el) => el.child(div().px(10).py(4).flex_none().text_size(11.5).bg(t.chrome).text_color(t.blocked ?? t.muted).child(this.error)))
-      .child(viewport);
+      .child(viewport)
+      .when(this.consoleOpen, (el) => el.child(this.consolePanel(t)));
+  }
+
+  consolePanel(t) {
+    const tone = (level) => t[LEVEL[level]?.[1]] ?? t.foreground;
+    return v_flex().id("console").h(170).flex_none().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.5)
+      .child(h_flex().h(26).px(10).gap(10).flex_none().items_center().border_b(1).border_color(t.border)
+        .child(div().font_medium().text_color(t.muted).child("Console"))
+        .child(div().flex_1().text_color(this.errors ? tone("error") : t.dim).child(this.errors ? `${this.errors} error${this.errors === 1 ? "" : "s"}` : "no errors"))
+        .child(div().id("console-clear").text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground))
+          .on_click((_e, cx) => this.readConsole(cx, true)).child("Clear"))
+        .child(div().id("console-close").text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground))
+          .on_click((_e, cx) => this.toggleConsole(cx)).child("✕")))
+      .child(v_flex().id("console-lines").flex_1().min_h(0).px(10).py(4).overflow_y_scrollbar()
+        .when(!this.logs.length, (el) => el.child(div().text_color(t.dim).child("Console output, page errors and failed requests show here.")))
+        .children(this.logs.map((l) => h_flex().id(`log-${l.n}`).gap(6).items_start().py(1)
+          .child(div().w(12).flex_none().text_color(tone(l.level)).child(LEVEL[l.level]?.[0] ?? ""))
+          .when(l.source !== "console", (el) => el.child(div().flex_none().text_color(t.dim).child(`[${l.source}]`)))
+          .child(div().flex_1().min_w(0).text_color(LEVEL[l.level] ? tone(l.level) : t.foreground).child(l.text)))));
   }
 }

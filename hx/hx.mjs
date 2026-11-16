@@ -8,7 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { call as browserCall, ensureDaemon, CHROME_PORT } from "./browser.mjs";
 
 const HOME = join(homedir(), ".config", "herdr-app");
@@ -53,7 +53,7 @@ Browser tabs (one shared headless Chrome; pages show as herdr tabs, agents drive
                                        a browser tab in your dev workspace (or --space)
   hx browser ls [--json]               every page: number, title, url, dev workspace/tab
   hx browser nav <url|back|forward|reload> [--tab <b>]
-  hx browser snap [--tab <b>]          numbered list of links, buttons and fields
+  hx browser snap [--diff] [--tab <b>] numbered list of links, buttons and fields (--diff: what changed since the last snap)
   hx browser click <n|css|x,y> [--double] [--tab <b>]
   hx browser type <text> [--into <n|css>] [--clear] [--enter] [--tab <b>]
   hx browser key <key> [--tab <b>]     enter, escape, tab, up, pagedown, ctrl+a, ...
@@ -62,10 +62,23 @@ Browser tabs (one shared headless Chrome; pages show as herdr tabs, agents drive
   hx browser shot [--full] [--tab <b>] saves a PNG and prints its path (read it to see the page)
   hx browser eval <js> [--tab <b>]     run JavaScript in the page, print the result
   hx browser wait [--for <css>] [--text <t>] [--timeout <s>] [--tab <b>]
+  hx browser console [--errors] [--clear] [--tab <b>]  console lines, page errors and failed requests
+  hx browser net [--failed] [--tab <b>]                the last 200 requests with their status
+  hx browser record start|stop [--tab <b>]             record the page; stop saves a GIF and prints its path
   hx browser close [--tab <b>]         closes the page and its herdr tab
   hx browser stop                      quit the browser (pages reopen when their tab shows again)
   --tab takes a number from ls, a page id, or a herdr "space/tab"; without it, the newest page
   in your dev workspace, else the only page. DevTools: http://127.0.0.1:${CHROME_PORT} (chrome-devtools-mcp --browser-url).
+
+Past Claude threads (the threads CLI: a local full-text index of ~/.claude/projects)
+  hx threads <words...> [--limit <n>] [--json]
+                                       update the index, then search: numbered, best first;
+                                       a ticket key (RIPPLE-4600) finds its threads
+  hx threads open <n|session-id> [--space <space>] [--name <n>] [--show]
+                                       resume result n of the last search in herdr: jumps to it if a
+                                       terminal already runs it, else a new dev workspace in its
+                                       folder (or a tab in --space) running claude --resume
+  hx threads update | stats            refresh the index / its size and last update
 
 New spaces and tabs open in the background (your view stays) unless --show.
 --agent defaults to "claude" when --task is given. Exit codes: 0 ok, 1 error, 2 refused.`;
@@ -81,7 +94,7 @@ function parseArgs(argv) {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (["json", "force", "show", "help", "full", "double", "enter", "clear"].includes(key)) opt[key] = true;
+      if (["json", "force", "show", "help", "full", "double", "enter", "clear", "diff", "errors", "failed"].includes(key)) opt[key] = true;
       else if (next === undefined) throw new Error(`--${key} needs a value`);
       else { opt[key] = next; i++; }
     } else pos.push(a);
@@ -92,6 +105,16 @@ function parseArgs(argv) {
 // ---- herdr state ----
 
 const run = (cmd, args, input) => execFileSync(cmd, args, { encoding: "utf8", input, maxBuffer: 64 * 2 ** 20, windowsHide: true });
+
+// Resumes a pane that claude/hibernate.mjs put to sleep and waits for its prompt. True if it woke.
+function wakeIfHibernated(address) {
+  if (!JSON.parse(run("hc", ["get", address, "--json"])).labels?.["claude.hibernated"]) return false;
+  process.stderr.write(`hx: ${address} is hibernated, resuming it first\n`);
+  const script = join(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "claude", "hibernate.mjs");
+  const out = JSON.parse(execFileSync("node", [script, "wake", address], { encoding: "utf8", windowsHide: true, timeout: 120000 }));
+  if (!out.awake) throw new Error(`${address} did not wake: ${out.note ?? "unknown"}`);
+  return true;
+}
 const appDo = (command, args = {}) => {
   const out = run("herdr-app", ["do", command, JSON.stringify(args)]);
   try { return JSON.parse(out); } catch { return { raw: out }; }
@@ -394,7 +417,9 @@ async function main(argv) {
       const out = run("hc", ["wait", target.address, "--json", ...(opt.timeout ? ["--timeout", String(opt.timeout)] : [])]);
       return print(opt, JSON.parse(out || "{}"), out.trim());
     }
-    if (cmd === "ask" && !target.agent) throw new Refused(`${label} is not an agent (a shell never ends a turn): use hx send, then hx read`);
+    // A hibernated Claude pane is a shell until it resumes: wake it, then it is an agent again.
+    const woke = (cmd === "send" || cmd === "ask") && wakeIfHibernated(target.address);
+    if (cmd === "ask" && !target.agent && !woke) throw new Refused(`${label} is not an agent (a shell never ends a turn): use hx send, then hx read`);
     const text = need(rest.join(" "), "the text to send");
     run("hc", ["send", ...(opt.force ? ["--force"] : []), target.address, text]);
     if (cmd === "send") return print(opt, { sent: target.address }, `sent to ${label}`);
@@ -410,8 +435,92 @@ async function main(argv) {
   }
 
   if (cmd === "browser") return browser(st, sub, rest, opt);
+  if (cmd === "threads") return threads(st, sub, rest, opt);
 
   throw new Error(`unknown command: ${cmd} (hx help)`);
+}
+
+// ---- past Claude threads (the threads CLI, thread-search) ----
+
+const THREADS_LAST = join(HOME, "data", "hx", "threads-last.json"); // the last search, for "open <n>"
+
+function threadsCli(args) {
+  try { return run("threads", args); } catch (e) {
+    if (e.code === "ENOENT") throw new Error("threads is not installed (cargo install --path Desktop/dev/thread-search-oss)");
+    throw new Error((e.stderr?.toString() || e.message).trim());
+  }
+}
+
+// The Claude session each live terminal runs (its herdr-resume label), so a search can say which
+// threads are open already.
+function openSessions(st) {
+  const bySession = new Map();
+  for (const sp of st.spaces) for (const tab of sp.tabs) for (const x of tab.terminals) {
+    if (!x.agent || SHELLS.test(x.agent)) continue;
+    try {
+      const session = JSON.parse(run("hc", ["get", x.address, "--json"])).labels?.["claude.session"];
+      if (session) bySession.set(session, { space: sp, tab, address: x.address });
+    } catch {}
+  }
+  return bySession;
+}
+
+const ago = (secs) => {
+  const m = Math.max(0, Math.round((Date.now() / 1000 - secs) / 60));
+  return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+};
+
+async function threads(st, sub, rest, opt) {
+  if (sub === "update") return process.stdout.write(threadsCli(["update"]));
+  if (sub === "stats") return process.stdout.write(threadsCli(["stats"]));
+  if (sub === "open") return openThread(st, need(rest[0], "a result number or session id"), opt);
+  const words = [sub, ...rest].filter(Boolean);
+  if (!words.length) throw new Error("hx threads <words...> | open <n> | update | stats");
+  threadsCli(["update"]);
+  const r = JSON.parse(threadsCli(["search", "--json", "--limit", String(opt.limit ?? 10), "--", ...words]));
+  if (r.state !== "ok") throw new Error(r.state === "building" ? "the index is still building; try again" : "no index yet: run hx threads update");
+  mkdirSync(dirname(THREADS_LAST), { recursive: true });
+  writeFileSync(THREADS_LAST, JSON.stringify(r.results));
+  const open = openSessions(st);
+  const results = r.results.map((h, i) => ({ n: i + 1, ...h, open: open.get(h.session_id) ? { space: open.get(h.session_id).space.name, tab: open.get(h.session_id).tab.name, terminal: open.get(h.session_id).address } : null }));
+  const snippet = (h) => (h.match?.segments ?? []).map((g) => (g.hit ? `[${g.text}]` : g.text)).join("").replace(/\s+/g, " ").slice(0, 140);
+  const text = [`${r.matched_all} match all words, ${r.matched_some} match some`, ...results.map((h) => [
+    `${String(h.n).padStart(2)}  ${h.title || "(untitled)"}`,
+    `    ${ago(h.last_active)} · ${h.folder_name}${h.branch ? ` · ${h.branch}` : ""} · ${h.prompts} prompt${h.prompts === 1 ? "" : "s"}${h.folder_state === "gone" ? " · folder gone" : ""}${h.open ? ` · OPEN in ${h.open.space}/${h.open.tab} (${h.open.terminal})` : ""}`,
+    ...(h.keys?.length ? [`    keys: ${h.keys.join(" ")}`] : []),
+    `    ${h.match?.role ?? ""}: ${snippet(h)}`,
+  ].join("\n")), results.length ? "\nhx threads open <n> resumes one in herdr." : ""].join("\n\n");
+  return print(opt, { ...r, results }, text);
+}
+
+async function openThread(st, which, opt) {
+  let last = [];
+  try { last = JSON.parse(readFileSync(THREADS_LAST, "utf8")); } catch {}
+  const hit = /^\d+$/.test(which) && Number(which) <= last.length ? last[Number(which) - 1]
+    : last.find((h) => h.session_id.startsWith(which));
+  if (!hit) throw new Error(`no result ${which} in the last search (run hx threads <words> first)`);
+  const running = openSessions(st).get(hit.session_id);
+  if (running) {
+    if (opt.show) { appDo("space.select", { id: running.space.id }); appDo("tab.select", { id: running.tab.id }); }
+    return print(opt, { session: hit.session_id, ...running, space: running.space.id, tab: running.tab.id, already: true },
+      `already open in ${running.space.name}/${running.tab.name} (${running.address})${opt.show ? "" : "; --show to jump there"}`);
+  }
+  if (hit.folder_state === "gone") throw new Refused(`its folder is gone (${hit.folder}); claude --resume needs it`);
+  const argv = ["claude", "--resume", hit.session_id];
+  const name = opt.name ?? (hit.keys?.find((k) => /^[A-Z][A-Z0-9]+-\d+$/.test(k)) ? `${hit.keys.find((k) => /^[A-Z][A-Z0-9]+-\d+$/.test(k))} ${hit.title}` : hit.title || hit.folder_name).slice(0, 60);
+  if (opt.space) {
+    const space = findSpace(st, opt.space);
+    const out = keepView(st, opt.show, () => appDo("tab.new", { space: space.id, name, folder: hit.folder, argv }));
+    return print(opt, { session: hit.session_id, ...out }, `resumed in a tab of ${space.name}; terminal ${out.terminal ?? "?"}`);
+  }
+  // The workspace whose folder holds the thread's folder (the deepest), else your own.
+  const norm = (f) => f.replace(/\//g, "\\").toLowerCase().replace(/\\+$/, "");
+  const root = st.roots.filter((r) => norm(hit.folder).startsWith(norm(r.folder))).sort((a, b) => b.folder.length - a.folder.length)[0]
+    ?? me(st)?.space?.root ?? st.roots[0];
+  const out = keepView(st, opt.show, () => appDo("space.new", { name, folder: hit.folder, argv }));
+  if (!out.space) throw new Error(`space.new failed: ${JSON.stringify(out)}`);
+  await bridge({ op: "space.root", space: out.space, root: root.id });
+  return print(opt, { session: hit.session_id, ...out, workspace: root.id }, `resumed as dev workspace ${name} in ${root.name}; terminal ${out.terminal}`);
 }
 
 // ---- browser tabs (hx/browser.mjs runs the shared headless Chrome) ----
@@ -485,8 +594,29 @@ async function browser(st, sub, rest, opt) {
     return print(opt, r, `${r.title || "(untitled)"}  ${r.url}`);
   }
   if (sub === "snap") {
-    const r = await browserCall("/snap", { id });
+    const r = await browserCall("/snap", { id, diff: opt.diff });
+    if (opt.diff && !r.first) {
+      const lines = [...r.added.map((l) => `+ ${l}`), ...r.removed.map((l) => `- ${l}`)];
+      return print(opt, r, `${r.title}  ${r.url}\n${lines.join("\n") || "(no change since the last snap)"}\n\n${r.items.join("\n")}`);
+    }
     return print(opt, r, `${r.title}  ${r.url}\n${r.items.join("\n") || "(nothing clickable)"}`);
+  }
+  if (sub === "console") {
+    const r = await browserCall("/console", { id, errors: opt.errors, clear: opt.clear });
+    const mark = { error: "✖", warn: "⚠" };
+    const lines = r.lines.map((l) => `${new Date(l.at).toLocaleTimeString()} ${mark[l.level] ?? " "} ${l.source === "console" ? "" : `[${l.source}] `}${l.text}`);
+    return print(opt, r, lines.join("\n") || (opt.errors ? "no errors" : "no console output"));
+  }
+  if (sub === "net") {
+    const r = await browserCall("/net", { id, failed: opt.failed });
+    const lines = r.requests.map((q) => `${String(q.status ?? "…").padEnd(8)} ${q.method.padEnd(6)} ${(q.type || "").padEnd(10)} ${q.url}`);
+    return print(opt, r, lines.join("\n") || (opt.failed ? "no failed requests" : "no requests yet"));
+  }
+  if (sub === "record") {
+    const action = need(rest[0], "start or stop");
+    if (!["start", "stop"].includes(action)) throw new Error("hx browser record start|stop");
+    const r = await browserCall("/record", { id, action });
+    return print(opt, r, action === "start" ? `recording ${r.url}; stop with: hx browser record stop` : `${r.path}  (${r.frames} frames, ${r.seconds}s)`);
   }
   if (sub === "click") {
     const what = need(rest[0], "a ref number, a CSS selector, or x,y");

@@ -22,6 +22,7 @@ export const DIR = join(HOME, "data", "browser");
 const FRAMES_REL = "data/browser/frames";
 const FRAMES = join(HOME, FRAMES_REL);
 const SHOTS = join(DIR, "shots");
+const RECORDINGS = join(DIR, "recordings");
 const PROFILE = join(process.env.LOCALAPPDATA ?? join(homedir(), ".cache"), "herdr-app", "browser-profile");
 export const DAEMON_PORT = 9334;
 export const CHROME_PORT = 9333;
@@ -29,8 +30,37 @@ const IDLE_EXIT_MS = 5 * 60000;
 const VIEWER_GONE_MS = 2500; // no frame request for this long: stop that tab's screencast
 const GC_EVERY_MS = 60000;
 const DEFAULT_SIZE = { width: 1280, height: 800 };
+const LOG_LIMIT = 300; // console lines, page errors and failed requests kept per page
+const NET_LIMIT = 200; // request rows kept per page
+const RECORD_MAX_FRAMES = 1500; // a GIF past this gets too big to open
+// Request types whose failure means the page is broken (images and fonts are noise).
+const WATCHED = new Set(["XHR", "Fetch", "Document"]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Frame pacing after Orca's remote browser (stablyai/orca browser-screencast-*): every 2nd compositor
+// frame, at most one frame per FRAME_MIN_MS with the newest kept, identical frames skipped. herdr's
+// image() has no decode event, so files stay on disk for FRAME_KEEP_MS and the tab stacks the last few:
+// a frame still loading always has an older, decoded one under it.
+const FRAME_QUALITY = 80;
+const FRAME_MIN_MS = 50;
+const FRAME_KEEP_MS = 3000;
+
+// Pages render at the display's scale (1.5 at 150%), so herdr shows frames at full sharpness instead
+// of stretching 1x ones. HX_BROWSER_SCALE overrides it. Read once per daemon run.
+let scale = null;
+function displayScale() {
+  if (scale) return scale;
+  scale = Number(process.env.HX_BROWSER_SCALE) || 0;
+  if (!scale && process.platform === "win32") {
+    try {
+      const ps = "Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class D { [DllImport(\"user32.dll\")] public static extern bool SetProcessDPIAware(); [DllImport(\"user32.dll\")] public static extern uint GetDpiForSystem(); }'; [D]::SetProcessDPIAware() | Out-Null; [D]::GetDpiForSystem()";
+      scale = Number(execFileSync("powershell", ["-NoProfile", "-Command", ps], { encoding: "utf8", windowsHide: true, timeout: 10000 }).trim()) / 96;
+    } catch (e) { log("display scale", e.message); }
+  }
+  scale = Math.min(3, Math.max(1, scale || 1));
+  log("display scale", scale);
+  return scale;
+}
 
 // ---- client side (hx and the mod's helper) ----
 
@@ -98,7 +128,7 @@ async function startChrome() {
   let v = await chromeVersion();
   if (!v) {
     mkdirSync(PROFILE, { recursive: true });
-    const child = spawn(findChrome(), CHROME_FLAGS, { detached: true, stdio: "ignore", windowsHide: true });
+    const child = spawn(findChrome(), [`--force-device-scale-factor=${displayScale()}`, ...CHROME_FLAGS], { detached: true, stdio: "ignore", windowsHide: true });
     child.unref();
     for (let i = 0; i < 100 && !v; i++) { await sleep(100); v = await chromeVersion(); }
     if (!v) throw new Error("headless Chrome did not open its DevTools port");
@@ -176,19 +206,84 @@ function onEvent(msg) {
     if (id && tabs.has(id)) { dropFrames(id); tabs.delete(id); save(); }
   } else if (!tab) return;
   else if (msg.method === "Page.screencastFrame") onFrame(tab, msg.params);
+  else if (msg.method.startsWith("Network.")) onNetwork(tab, msg);
+  else if (msg.method === "Runtime.consoleAPICalled") {
+    const p = msg.params;
+    if (p.timestamp >= tab.attachedAt) addLog(tab, p.type === "warning" ? "warn" : p.type, "console", argsText(p.args));
+  } else if (msg.method === "Runtime.exceptionThrown") {
+    const d = msg.params.exceptionDetails ?? {};
+    if (msg.params.timestamp >= tab.attachedAt) addLog(tab, "error", "page", d.exception?.description ?? d.text ?? "uncaught exception");
+  } else if (msg.method === "Log.entryAdded") {
+    const e = msg.params.entry ?? {};
+    // Failed requests come from onNetwork, which also leaves out images and favicons.
+    if (e.timestamp >= tab.attachedAt && e.source !== "network") addLog(tab, e.level === "warning" ? "warn" : e.level, e.source ?? "log", `${e.text ?? ""}${e.url ? `  ${e.url}` : ""}`);
+  } else if (msg.method === "Inspector.targetCrashed") addLog(tab, "error", "page", "the page crashed");
   else if (msg.method === "Page.frameStartedLoading") tab.loading = true;
   else if (msg.method === "Page.frameStoppedLoading" || msg.method === "Page.loadEventFired") { tab.loading = false; wake(tab); }
 }
 
+// ---- console, page errors and requests (after herdr-browser by StructuPath, MIT) ----
+
+// Console arguments as one line: strings as they are, other values by their preview.
+function argsText(args = []) {
+  return args.map((a) => (a.type === "string" ? a.value : a.value !== undefined ? JSON.stringify(a.value)
+    : a.description ?? a.preview?.description ?? a.type)).join(" ").slice(0, 2000);
+}
+
+function addLog(tab, level, source, text) {
+  tab.logSeq += 1;
+  tab.logs.push({ n: tab.logSeq, at: Date.now(), level, source, text });
+  if (tab.logs.length > LOG_LIMIT) tab.logs.shift();
+  if (level === "error") tab.errors += 1;
+  wake(tab);
+}
+
+// One row per request; a failed XHR, fetch or document (4xx, 5xx, no response) also goes to the log.
+function onNetwork(tab, { method, params: p }) {
+  if (method === "Network.requestWillBeSent") {
+    const row = { id: p.requestId, at: Date.now(), method: p.request?.method ?? "", type: p.type ?? "", url: p.request?.url ?? "", status: null };
+    tab.net.push(row);
+    tab.netById.set(p.requestId, row);
+    if (tab.net.length > NET_LIMIT) tab.netById.delete(tab.net.shift().id);
+    return;
+  }
+  const row = tab.netById.get(p.requestId);
+  if (!row) return;
+  if (method === "Network.responseReceived") row.status = p.response?.status ?? null;
+  else if (method === "Network.loadingFailed") row.status = p.canceled ? "canceled" : p.errorText || "failed";
+  else return;
+  const failed = typeof row.status === "number" ? row.status >= 400 : row.status !== "canceled";
+  if (failed && WATCHED.has(row.type)) addLog(tab, "error", "network", `${row.status} ${row.method} ${row.url}`);
+}
+
 function onFrame(tab, { data, sessionId }) {
   cdp.send("Page.screencastFrameAck", { sessionId }, tab.session).catch(() => {});
+  // Chrome resends an unchanged picture while the page animates off screen: same bytes, nothing to draw.
+  if (data === tab.lastData) return;
+  tab.lastData = data;
+  const wait = FRAME_MIN_MS - (Date.now() - (tab.frameAt ?? 0));
+  if (wait <= 0) { writeFrame(tab, data); return; }
+  // Too soon: hold the newest and write it when the gap is over (a still page may send no more).
+  tab.heldFrame = data;
+  tab.heldTimer ??= setTimeout(() => {
+    tab.heldTimer = null;
+    const held = tab.heldFrame;
+    tab.heldFrame = null;
+    if (held && tabs.get(tab.id) === tab) writeFrame(tab, held);
+  }, wait);
+}
+
+function writeFrame(tab, data) {
+  tab.frameAt = Date.now();
   tab.seq += 1;
   const name = `${tab.id.slice(0, 12)}-${tab.seq}.jpg`;
-  try { writeFileSync(join(FRAMES, name), Buffer.from(data, "base64")); } catch (e) { log("frame write", e.message); return; }
+  const bytes = Buffer.from(data, "base64");
+  try { writeFileSync(join(FRAMES, name), bytes); } catch (e) { log("frame write", e.message); return; }
+  if (tab.recording) recordFrame(tab, bytes);
   tab.frame = `${FRAMES_REL}/${name}`;
-  // Keep the last six: the tab draws the one before under the newest while that loads.
-  const old = `${tab.id.slice(0, 12)}-${tab.seq - 6}.jpg`;
-  rmSync(join(FRAMES, old), { force: true });
+  (tab.written ??= []).push({ name, at: tab.frameAt });
+  // herdr may still be loading a recent file: delete only old ones, and always keep the last six.
+  while (tab.written.length > 6 && tab.frameAt - tab.written[0].at > FRAME_KEEP_MS) rmSync(join(FRAMES, tab.written.shift().name), { force: true });
   wake(tab);
 }
 
@@ -210,9 +305,12 @@ function save() {
 async function attach(id, url) {
   const c = await connect();
   const { sessionId } = await c.send("Target.attachToTarget", { targetId: id, flatten: true });
-  const tab = { id, session: sessionId, url, title: "", loading: false, seq: 0, frame: null, waiters: [], size: null, casting: false, viewedAt: 0, owner: null };
+  const tab = { id, session: sessionId, url, title: "", loading: false, seq: 0, frame: null, waiters: [], size: null, casting: false, viewedAt: 0, owner: null,
+    // Chrome replays older console lines when Runtime and Log are enabled: those are skipped.
+    attachedAt: Date.now(), logs: [], logSeq: 0, errors: 0, net: [], netById: new Map(), recording: null, lastSnap: null };
   tabs.set(id, tab);
-  await Promise.all([c.send("Page.enable", {}, sessionId), c.send("Runtime.enable", {}, sessionId)]);
+  await Promise.all([c.send("Page.enable", {}, sessionId), c.send("Runtime.enable", {}, sessionId),
+    c.send("Network.enable", {}, sessionId), c.send("Log.enable", {}, sessionId)]);
   await setSize(tab, DEFAULT_SIZE);
   save();
   return tab;
@@ -238,7 +336,7 @@ async function setSize(tab, size) {
   const width = Math.max(200, Math.round(size.width)), height = Math.max(150, Math.round(size.height));
   if (tab.size?.width === width && tab.size?.height === height) return;
   tab.size = { width, height };
-  await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, tab.session);
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: displayScale(), mobile: false }, tab.session);
   if (tab.casting) await startCast(tab, true);
 }
 
@@ -246,7 +344,8 @@ async function startCast(tab, restart) {
   if (tab.casting && !restart) return;
   if (restart) await cdp.send("Page.stopScreencast", {}, tab.session).catch(() => {});
   tab.casting = true;
-  await cdp.send("Page.startScreencast", { format: "jpeg", quality: 72, maxWidth: tab.size.width, maxHeight: tab.size.height, everyNthFrame: 1 }, tab.session);
+  const k = displayScale();
+  await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_QUALITY, maxWidth: Math.round(tab.size.width * k), maxHeight: Math.round(tab.size.height * k), everyNthFrame: 2 }, tab.session);
 }
 
 async function stopCast(tab) {
@@ -255,7 +354,49 @@ async function stopCast(tab) {
   await cdp.send("Page.stopScreencast", {}, tab.session).catch(() => {});
 }
 
-const info = (t) => ({ id: t.id, url: t.url, title: t.title, loading: t.loading, seq: t.seq, frame: t.frame, size: t.size, owner: t.owner });
+const info = (t) => ({ id: t.id, url: t.url, title: t.title, loading: t.loading, seq: t.seq, frame: t.frame, size: t.size, owner: t.owner,
+  logSeq: t.logSeq, errors: t.errors, recording: t.recording ? { at: t.recording.at, frames: t.recording.frames.length } : null });
+
+// ---- recording: the screencast's frames, joined into a GIF by ImageMagick on stop ----
+
+function recordFrame(tab, bytes) {
+  const rec = tab.recording;
+  if (rec.frames.length >= RECORD_MAX_FRAMES) return;
+  const file = `${String(rec.frames.length).padStart(5, "0")}.jpg`;
+  try { writeFileSync(join(rec.dir, file), bytes); rec.frames.push({ file, at: Date.now() }); } catch (e) { log("record frame", e.message); }
+}
+
+async function startRecording(tab) {
+  if (tab.recording) return tab.recording;
+  const dir = join(RECORDINGS, `${tab.id.slice(0, 8)}-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  tab.recording = { dir, at: Date.now(), frames: [] };
+  await startCast(tab); // the screencast must run even when no herdr tab shows the page
+  return tab.recording;
+}
+
+// GIF delays are in 1/100 s; the last frame holds for a second.
+async function stopRecording(tab) {
+  const rec = tab.recording;
+  if (!rec) throw new Error("this page is not recording");
+  tab.recording = null;
+  if (!rec.frames.length) { rmSync(rec.dir, { recursive: true, force: true }); throw new Error("no frames were recorded (nothing changed on the page)"); }
+  const args = [];
+  rec.frames.forEach((f, i) => {
+    const next = rec.frames[i + 1]?.at ?? f.at + 1000;
+    args.push("-delay", String(Math.max(2, Math.round((next - f.at) / 10))), f.file);
+  });
+  const out = `${rec.dir}.gif`;
+  await new Promise((ok, fail) => {
+    const p = spawn("magick", [...args, "-layers", "Optimize", out], { cwd: rec.dir, windowsHide: true });
+    let err = "";
+    p.stderr.on("data", (d) => { err += d; });
+    p.on("error", (e) => fail(new Error(`ImageMagick (magick) is needed to save a recording: ${e.message}`)));
+    p.on("close", (code) => (code === 0 ? ok() : fail(new Error(`magick exited ${code}: ${err.trim().slice(0, 300)}`))));
+  });
+  rmSync(rec.dir, { recursive: true, force: true });
+  return { path: out, frames: rec.frames.length, seconds: Math.round((Date.now() - rec.at) / 1000) };
+}
 
 async function evaluate(tab, expression, { returnByValue = true } = {}) {
   const r = await cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue, userGesture: true }, tab.session);
@@ -281,11 +422,24 @@ const KEYS = {
   home: [36, "Home"], end: [35, "End"], pageup: [33, "PageUp"], pagedown: [34, "PageDown"],
 };
 
+// A symbol's Windows key code: the key it is typed on (US layout). Its character code is wrong:
+// "." is 46, which is VK_DELETE, so Chrome deleted instead of typing; "'" is 39 (Right arrow).
+const SYMBOL_KEYS = {
+  186: ";:", 187: "=+", 188: ",<", 189: "-_", 190: ".>", 191: "/?", 192: "`~", 219: "[{", 220: "\\|", 221: "]}", 222: "'\"",
+  48: ")", 49: "!", 50: "@", 51: "#", 52: "$", 53: "%", 54: "^", 55: "&", 56: "*", 57: "(",
+};
+const SYMBOL_VK = new Map(Object.entries(SYMBOL_KEYS).flatMap(([vk, chars]) => [...chars].map((c) => [c, Number(vk)])));
+
+function keyCode(single) {
+  if (/[a-z0-9]/i.test(single)) return single.toUpperCase().charCodeAt(0);
+  return SYMBOL_VK.get(single) ?? 0;
+}
+
 // modifiers: CDP bits (alt 1, ctrl 2, meta 4, shift 8).
 async function pressKey(tab, key, modifiers = 0, text) {
   const k = KEYS[key.toLowerCase()];
   const single = key.length === 1 ? key : null;
-  const code = k?.[0] ?? (single ? single.toUpperCase().charCodeAt(0) : 0);
+  const code = k?.[0] ?? (single ? keyCode(single) : 0);
   const name = k?.[1] ?? single ?? key;
   const typed = modifiers & ~8 ? undefined : text ?? k?.[2] ?? single ?? undefined;
   const base = { modifiers, windowsVirtualKeyCode: code, key: name, code: single && /[a-z]/i.test(single) ? `Key${single.toUpperCase()}` : name };
@@ -365,7 +519,7 @@ function herdrTabIds() {
 }
 
 async function gc() {
-  for (const t of tabs.values()) if (t.casting && Date.now() - t.viewedAt > VIEWER_GONE_MS) await stopCast(t);
+  for (const t of tabs.values()) if (t.casting && !t.recording && Date.now() - t.viewedAt > VIEWER_GONE_MS) await stopCast(t);
   const live = tabs.size ? herdrTabIds() : null;
   // herdr-app closed: its tabs restore their pages on the next start, so Chrome can go.
   herdrGone = tabs.size && !live ? herdrGone + 1 : 0;
@@ -451,7 +605,36 @@ const routes = {
     const text = await evaluate(t, "document.body ? document.body.innerText : ''");
     return { ...info(t), text: String(text ?? "").slice(0, max) };
   },
-  "POST /snap": async ({ id }) => ({ ...(await evaluate(await find(id), SNAPSHOT_JS)) }),
+  // diff: what changed since this page's last snap. Refs are renumbered each snap, so lines are
+  // compared without their [n].
+  "POST /snap": async ({ id, diff }) => {
+    const t = await find(id);
+    const snap = await evaluate(t, SNAPSHOT_JS);
+    const before = t.lastSnap;
+    t.lastSnap = snap.items;
+    if (!diff) return snap;
+    const bare = (line) => line.replace(/^\[\d+\] /, "");
+    const old = new Set((before ?? []).map(bare)), now = new Set(snap.items.map(bare));
+    return { ...snap, first: !before, added: snap.items.filter((l) => !old.has(bare(l))), removed: (before ?? []).filter((l) => !now.has(bare(l))) };
+  },
+  // Console lines, page errors and failed requests after `after` (a log number), oldest first.
+  "POST /console": async ({ id, after = 0, errors, clear }) => {
+    const t = await find(id);
+    if (clear) { t.logs = []; t.errors = 0; }
+    const lines = t.logs.filter((l) => l.n > after && (!errors || l.level === "error"));
+    return { ...info(t), lines };
+  },
+  "POST /net": async ({ id, failed }) => {
+    const t = await find(id);
+    const bad = (r) => (typeof r.status === "number" ? r.status >= 400 : r.status !== null && r.status !== "canceled");
+    return { ...info(t), requests: t.net.filter((r) => !failed || bad(r)).map(({ id: _id, ...r }) => r) };
+  },
+  "POST /record": async ({ id, action }) => {
+    const t = await find(id);
+    if (action === "start") { const r = await startRecording(t); return { ...info(t), dir: r.dir }; }
+    if (action === "stop") return { ...info(t), ...(await stopRecording(t)) };
+    return info(t);
+  },
   "POST /click": async ({ id, ref, x, y, double }) => {
     const t = await find(id);
     const at = ref !== undefined ? await refCenter(t, ref) : { x, y };
@@ -506,7 +689,7 @@ async function serve() {
   server.on("error", (e) => { log("server", e.message); process.exit(e.code === "EADDRINUSE" ? 0 : 1); });
   server.listen(DAEMON_PORT, "127.0.0.1", () => log("listening", DAEMON_PORT));
   setInterval(() => gc().catch((e) => log("gc", e.message)), GC_EVERY_MS);
-  setInterval(() => { for (const t of tabs.values()) if (t.casting && Date.now() - t.viewedAt > VIEWER_GONE_MS) stopCast(t); }, 1000);
+  setInterval(() => { for (const t of tabs.values()) if (t.casting && !t.recording && Date.now() - t.viewedAt > VIEWER_GONE_MS) stopCast(t); }, 1000);
 }
 
 if (process.argv[2] === "serve" && fileURLToPath(import.meta.url) === process.argv[1]) {
