@@ -161,6 +161,13 @@
                               "column": "panel"
                             }
                           }
+                        },
+                        {
+                          "id": "learn",
+                          "type": "block",
+                          "content": {
+                            "mod": "learn"
+                          }
                         }
                       ],
                       "active": "files"
@@ -186,11 +193,30 @@
       }
     },
     {
-      "id": "status",
-      "type": "block",
-      "content": {
-        "mod": "status-usage"
-      },
+      "id": "status-row",
+      "type": "row",
+      "children": [
+        {
+          "id": "status",
+          "type": "block",
+          "content": {
+            "mod": "status-usage"
+          },
+          "size": {
+            "weight": 1
+          }
+        },
+        {
+          "id": "hibernate",
+          "type": "block",
+          "content": {
+            "mod": "hibernate"
+          },
+          "size": {
+            "px": 120
+          }
+        }
+      ],
       "size": {
         "px": 28
       }
