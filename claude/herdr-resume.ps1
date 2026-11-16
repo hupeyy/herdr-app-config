@@ -18,6 +18,8 @@ if ($Action -eq "shell") {
     if (-not $t -or $t.pid -ne $PID) { return }
     $id = $t.labels.'claude.session'
     if (-not $id -or -not $t.labels.'herdr.space') { return }
+    # A hibernated pane stays asleep after a reboot too; hibernate.mjs wake resumes it.
+    if ($t.labels.'claude.hibernated') { return }
     $mode = if ($t.labels.'claude.mode') { $t.labels.'claude.mode' } else { "auto" }
     # The core recovers the shell in the launch folder; sessions are stored per folder.
     $cwd = $t.labels.'claude.cwd'
@@ -38,13 +40,15 @@ if ($Action -eq "start") {
     try { $session = Get-Content $sessionFile -Raw | ConvertFrom-Json } catch { exit 0 }
     if ($session.kind -ne "interactive") { exit 0 }
     $mode = if ($payload.permission_mode) { $payload.permission_mode } else { "auto" }
-    & hc label $terminal "claude.session=$($payload.session_id)" "claude.mode=$mode" "claude.cwd=$($payload.cwd)" 2>$null | Out-Null
+    & hc label $terminal "claude.session=$($payload.session_id)" "claude.mode=$mode" "claude.cwd=$($payload.cwd)" "claude.hibernated=" 2>$null | Out-Null
 }
 elseif ($Action -eq "end") {
     # The session file is gone by now, so match the recorded session instead.
     # "other" is what a killed or shut-down session reports: keep it to resume.
     if ($payload.reason -notin @("prompt_input_exit", "logout", "bypass_permissions_disabled")) { exit 0 }
     try { $t = hc get $terminal --json 2>$null | ConvertFrom-Json } catch { exit 0 }
+    # hibernate.mjs exited it on purpose: keep the labels so it resumes in place.
+    if ($t.labels.'claude.hibernated') { exit 0 }
     if ($t.labels.'claude.session' -eq $payload.session_id) {
         & hc label $terminal "claude.session=" "claude.mode=" "claude.cwd=" 2>$null | Out-Null
     }
