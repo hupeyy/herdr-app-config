@@ -5,17 +5,17 @@
 // here: the GIF is cropped to the box its pixels fill, so it fits the card; an Idle without a
 // Walk counts, and 4 Pokémon use a form's sprite (FORMS). SpriteCollab has none for 38 (its
 // tracker.json): only when it answers 404 does a Pokémon fall back. Those take
-// Pokémon Showdown's gen5ani GIF, or, for the 18 gen5ani lacks too, a Black/White-style GIF made
-// from the 2D still (tools/gen5-style, in data/.../gen5gen). A Pokémon with no Idle, or a one-frame
+// Pokémon Showdown's gen5ani GIF, or, for the ones gen5ani lacks too (Okidogi, the Paradoxes...),
+// Showdown's still gen 5-style sprite, trimmed to its pixels. A Pokémon with no Idle, or a one-frame
 // Idle (Arcanine, Rillaboom, Iron Thorns), takes its SpriteCollab Walk.
 import { exec, appHome, readTextFile, writeTextFile } from "herdr";
 import { nameOf } from "./pokemon-names.js";
 
 const ICONS_REL = "data/pokemon-icons";
 export const SPRITES_REL = `${ICONS_REL}/agents`;
-const GENERATED_REL = `${ICONS_REL}/gen5gen`;
 const PMD = "https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite";
 const GEN5ANI = "https://play.pokemonshowdown.com/sprites/gen5ani";
+const GEN5 = "https://play.pokemonshowdown.com/sprites/gen5"; // stills, gen 5 style, for every Pokémon
 // Bump when the recipe changes, so cached sprites are rebuilt. The GIF's name carries it: herdr
 // keeps a decoded image by path, so a GIF rewritten in place stays frozen on the old copy.
 export const VERSION = 5; // 4: network failures had been saved as fallbacks; 5: Walk for a one-frame Idle
@@ -25,6 +25,14 @@ const IDLE_ROW = 1;
 const FORMS = { 668: "0668/0000/0000/0002", 870: "0870/0002", 999: "0999/0001", 1008: "1008/0001" };
 
 const pad = (id) => String(id).padStart(4, "0");
+// SpriteCollab's folders are <dex>/<form>/<shiny>/<gender>: a shiny sets the third part to 0001.
+function pmdPath(id, shiny) {
+  const parts = (FORMS[id] ?? pad(id)).split("/");
+  if (!shiny) return parts.join("/");
+  while (parts.length < 3) parts.push("0000");
+  parts[2] = "0001";
+  return parts.join("/");
+}
 const showdownId = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
   .replace(/♀/g, "f").replace(/♂/g, "m").toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -114,19 +122,21 @@ async function gifSize(file) {
 // (the Edit dialog's Update sprites) is fetched again, so new and revised SpriteCollab sprites
 // arrive. Each build gets its own GIF name: herdr keeps a decoded image by path.
 // meta.json is written last and marks it done.
-export async function loadSprite(id, since = 0) {
-  const rel = `${SPRITES_REL}/${pad(id)}`;
+// shiny: the same chain from each source's shiny sprites, cached in its own folder.
+export async function loadSprite(id, since = 0, shiny = false) {
+  const rel = `${SPRITES_REL}/${pad(id)}${shiny ? "-shiny" : ""}`;
   const dir = `${appHome()}/${rel}`;
   const metaFile = `${dir}/meta.json`;
   const old = await readTextFile(metaFile).catch(() => null);
   try {
     const meta = JSON.parse(old);
-    if (meta.version === VERSION && (meta.built ?? 0) >= since && (meta.row ?? IDLE_ROW) === IDLE_ROW) return meta;
+    // "generated" was our own animation of the still, now replaced by Showdown's gen 5 still.
+    if (meta.version === VERSION && meta.source !== "generated" && (meta.built ?? 0) >= since && (meta.row ?? IDLE_ROW) === IDLE_ROW) return meta;
   } catch {}
   let meta = null;
   const built = Date.now();
   const gif = `idle-${VERSION}-${built.toString(36)}.gif`;
-  const base = `${PMD}/${FORMS[id] ?? pad(id)}`;
+  const base = `${PMD}/${pmdPath(id, shiny)}`;
   if (await fetchFile(`${dir}/AnimData.xml`, `${base}/AnimData.xml`)) {
     const anims = parseAnims(await readTextFile(`${dir}/AnimData.xml`).catch(() => ""));
     const walk = resolve(anims, "Walk");
@@ -143,21 +153,22 @@ export async function loadSprite(id, since = 0) {
       }
     }
   }
-  if (!meta && await fetchFile(`${dir}/${gif}`, `${GEN5ANI}/${showdownId(nameOf(id))}.gif`, true)) {
+  if (!meta && await fetchFile(`${dir}/${gif}`, `${GEN5ANI}${shiny ? "-shiny" : ""}/${showdownId(nameOf(id))}.gif`, true)) {
     meta = { path: `${rel}/${gif}`, ...(await gifSize(`${dir}/${gif}`)), source: "gen5ani" };
   }
-  if (!meta) {
-    const file = `${appHome()}/${GENERATED_REL}/${id}.gif`;
-    const size = await gifSize(file).catch(() => null);
-    if (size) meta = { path: `${GENERATED_REL}/${id}.gif`, ...size, source: "generated" };
+  const still = gif.replace(/\.gif$/, ".png");
+  if (!meta && await fetchFile(`${dir}/${still}`, `${GEN5}${shiny ? "-shiny" : ""}/${showdownId(nameOf(id))}.png`, true)) {
+    // The 96x96 sheet has wide empty margins: trim them, so it fills the card like the GIFs.
+    await im([`${dir}/${still}`, "-trim", "+repage", `${dir}/${still}`]);
+    meta = { path: `${rel}/${still}`, ...(await gifSize(`${dir}/${still}`)), source: "gen5" };
   }
   if (!meta) return null;
-  meta = { version: VERSION, id, built, ...meta };
+  meta = { version: VERSION, id, shiny, built, ...meta };
   // writeTextFile replaces a file only when told its current text (null creates a new one).
   await writeTextFile(metaFile, JSON.stringify(meta), old);
   // Older builds of this Pokémon (earlier recipes and refreshes): every idle GIF but the new one.
   const keep = meta.path.startsWith(`${rel}/`) ? meta.path.slice(rel.length + 1) : "";
   await exec("powershell", ["-NoProfile", "-Command",
-    `Get-ChildItem -LiteralPath '${dir}' -Filter 'idle-*.gif' | Where-Object Name -ne '${keep}' | Remove-Item -ErrorAction SilentlyContinue`]).catch(() => null);
+    `Get-ChildItem -LiteralPath '${dir}' -Filter 'idle-*' | Where-Object Name -ne '${keep}' | Remove-Item -ErrorAction SilentlyContinue`]).catch(() => null);
   return meta;
 }

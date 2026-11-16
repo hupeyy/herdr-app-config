@@ -145,8 +145,11 @@ export default class StatusUsage extends View {
   // last summary says they wait on Alex (refreshed per agent when it finishes, or by Summarize).
   summary(t) {
     const items = shared("space.summary")?.items ?? {};
+    // space-summary's NEEDS_YOU states that come from a summary ("approve" is the live blocked status),
+    // plus "you", the older name for "turn".
+    const mine = ["turn", "stuck", "you"];
     const needs = terminals().filter((x) => x.state === "live" && (x.status === "blocked"
-      || (items[x.address]?.verdict === "you" && items[x.address]?.session === x.labels?.["claude.session"]))).length;
+      || (mine.includes(items[x.address]?.verdict) && items[x.address]?.session === x.labels?.["claude.session"]))).length;
     return h_flex().id("summary-chip").h(20).px(7).gap(6).items_center().rounded(5).border_1().border_color(t.border)
       .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Workspace summary")
       .on_click(() => openOverlay({ mod: "space-summary", kind: "dialog", width: 0.86, height: 0.8 }))
@@ -161,19 +164,24 @@ export default class StatusUsage extends View {
     this.nextAt = Date.now() + EVERY_MS;
     cx.spawn(async (cx) => {
       let next;
+      // Which step failed goes into the error, so a failing refresh says why (never the token).
+      let step = "reading the sign-in file";
       try {
         const raw = await readTextFile(`${home()}\\.claude\\.credentials.json`);
+        step = "parsing the sign-in file";
         const token = raw ? JSON.parse(raw)?.claudeAiOauth?.accessToken : null;
         if (!token) next = { at: Date.now(), error: "Not signed in" };
         else {
+          step = "calling the usage API";
           const res = await fetch(URL, { headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0" } });
+          step = `reading the usage API's answer (HTTP ${res.status})`;
           if (res.status === 401 || res.status === 403) next = { at: Date.now(), error: "Sign-in expired" };
-          else if (res.status === 429) { this.nextAt = Date.now() + BACKOFF_MS; next = { ...(shared(CACHE) ?? {}), at: Date.now() }; }
+          else if (res.status === 429) { this.nextAt = Date.now() + BACKOFF_MS; next = { ...(shared(CACHE) ?? {}), at: Date.now(), error: "Usage API rate limit: retrying in 10 min" }; }
           else if (!res.ok) next = { ...(shared(CACHE) ?? {}), at: Date.now(), error: `Usage: HTTP ${res.status}` };
-          else next = { at: Date.now(), ...parse(await res.json()), error: null };
+          else next = { at: Date.now(), okAt: Date.now(), ...parse(await res.json()), error: null };
         }
-      } catch {
-        next = { ...(shared(CACHE) ?? {}), at: Date.now(), error: "Usage unavailable" };
+      } catch (e) {
+        next = { ...(shared(CACHE) ?? {}), at: Date.now(), error: `Usage unavailable: ${step}: ${String(e?.message ?? e).slice(0, 160)}` };
       }
       setShared(CACHE, next);
       cx.notify();
@@ -187,7 +195,12 @@ export default class StatusUsage extends View {
     const head = h_flex().gap(6).items_center().child(div().text_color(t.dim).child("Used")).child(icon);
     if (!u) return head.child(div().text_color(t.dim).child("…"));
     if (u.error && !u.session && !u.weekly) return head.child(div().text_color(t.dim).child(u.error));
-    const s = u.session, w = u.weekly, f = u.fable;
+    // A window whose reset time has passed is empty now, whatever the last answer said.
+    const now = Date.now();
+    const live = (win) => (win && win.resets && win.resets <= now ? { pct: 0, resets: null, severity: "normal" } : win);
+    const s = live(u.session), w = live(u.weekly), f = live(u.fable);
+    // Old numbers after failed refreshes are marked, so they are not read as current.
+    const stale = Boolean(u.error) && now - (u.okAt ?? 0) > 2 * EVERY_MS;
     const bar = h_flex().w(46).h(5).flex_none().rounded(3).bg(t.border).overflow_hidden()
       .child(div().h_full().w(Math.round(46 * Math.min(100, s?.pct ?? 0) / 100)).bg(color(s)));
     const part = (win, label) => div().text_color(win?.pct >= 80 ? color(win) : t.muted).child(`${Math.round(win.pct)}% ${label}`);
@@ -196,12 +209,14 @@ export default class StatusUsage extends View {
       w && `Week: ${Math.round(w.pct)}%, resets in ${left(w.resets)}`,
       f && `Fable this week: ${Math.round(f.pct)}%`,
       u.error && `Last refresh failed: ${u.error}`,
+      stale && `These numbers are from ${u.okAt ? new Date(u.okAt).toLocaleString() : "an earlier refresh"}.`,
     ].filter(Boolean).join("\n");
     return h_flex().id("usage").gap(7).items_center().tooltip(tip)
       .child(head).child(bar)
       .when(Boolean(s), (el) => el.child(part(s, left(s.resets) || "5h")))
       .when(Boolean(w), (el) => el.child(div().text_color(t.dim).child("·")).child(part(w, left(w.resets))))
-      .when(Boolean(f), (el) => el.child(div().text_color(t.dim).child("·")).child(part(f, "Fable")));
+      .when(Boolean(f), (el) => el.child(div().text_color(t.dim).child("·")).child(part(f, "Fable")))
+      .when(stale, (el) => el.child(div().text_color(t.working).child("stale")));
   }
 
   // The palette key as actually bound, not a hardcoded one.

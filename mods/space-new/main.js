@@ -21,6 +21,9 @@ const basename = (path) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p
 const roots = () => shared("roots") ?? [];
 // A dev workspace's Pokémon (space-panel draws it; icons downloaded there on first use).
 const POKEMON = "space.pokemon";
+// Shiny flags, owned by space-panel (a mod cannot import another's code): a new pick here rolls again.
+const SHINY = "space.shiny";
+const SHINY_ODDS = 0.01;
 const POKEMON_ICON = (n) => `data/pokemon-icons/${n}.png`;
 // SpriteCollab Normal portraits (portraits.mjs), 40x40.
 const PORTRAIT_DIR = "data/pokemon-portraits";
@@ -78,6 +81,7 @@ export default class WorkspaceDialog extends View {
       this.color = (shared("space.colors") ?? {})[this.space.id] ?? "ansi6";
       this.icon = (shared("space.icons") ?? {})[this.space.id] ?? null;
       this.pokemon = (shared(POKEMON) ?? {})[this.space.id] ?? null;
+      this.pokemonBefore = this.pokemon;
       this.ball = (shared(BALL_PICK) ?? {})[this.space.id] ?? "classic";
       this.initPicker(cx);
     }
@@ -162,6 +166,12 @@ export default class WorkspaceDialog extends View {
         if (name !== (s.named ? s.name : "")) run("space.rename", { id: s.id, name });
         setShared(BALL_PICK, { ...(shared(BALL_PICK) ?? {}), [s.id]: this.ball });
         if (this.pokemon) setShared(POKEMON, { ...(shared(POKEMON) ?? {}), [s.id]: this.pokemon });
+        // A different Pokémon is a new encounter: 1 in 100 is shiny. The same one keeps its look.
+        if (this.pokemon && this.pokemon !== this.pokemonBefore) {
+          const shiny = { ...(shared(SHINY) ?? {}) };
+          if (Math.random() < SHINY_ODDS) shiny[s.id] = true; else delete shiny[s.id];
+          setShared(SHINY, shiny);
+        }
       }
       this.close();
       return;

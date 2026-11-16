@@ -41,8 +41,28 @@ function cardTitle(space, children) {
   return ticket ? `${ticket.key} ${ticket.summary}` : space.name;
 }
 
-const RANK = { you: 0, others: 1, working: 2, unknown: 3, cleared: 4, done: 5 };
-const LABEL = { you: "Needs you", others: "Waiting", working: "Working", unknown: "Not summarized", cleared: "Cleared", done: "Done" };
+// States, most urgent first. approve and working are live (herdr status); cleared is set by
+// status-usage on /clear; the rest come from Haiku (summarize.mjs VERDICTS). tone: a theme color.
+export const STATES = {
+  approve: { rank: 0, label: "Approve", tone: "blocked", group: "you", tip: "Stopped at a permission prompt" },
+  turn: { rank: 1, label: "Your turn", tone: "blocked", group: "you", tip: "Asked you something, or finished work for you to review" },
+  stuck: { rank: 2, label: "Stuck", tone: "blocked", group: "you", tip: "Hit an error or gave up" },
+  working: { rank: 3, label: "Working", tone: "working", group: "progress", tip: "Running a turn" },
+  background: { rank: 4, label: "Background", tone: "working", group: "progress", tip: "Its own job, test or monitor runs on; it resumes by itself" },
+  ci: { rank: 5, label: "Waiting on CI", tone: "dim", group: "waiting", tip: "Waits on CI, a deploy or other automation" },
+  team: { rank: 6, label: "Waiting on team", tone: "dim", group: "waiting", tip: "Waits on a reviewer or colleague" },
+  unknown: { rank: 7, label: "Not summarized", tone: "dim", group: "unknown", tip: "No summary for its latest turn yet" },
+  optional: { rank: 8, label: "Optional", tone: "done", group: "done", tip: "Done; offered a follow-up you may take or skip" },
+  done: { rank: 9, label: "Done", tone: "done", group: "done", tip: "Finished; the dev workspace can close" },
+  cleared: { rank: 10, label: "Cleared", tone: "dim", group: "done", tip: "The chat was cleared" },
+};
+// The states that need Alex (also counted by status-usage's "N need you" chip).
+export const NEEDS_YOU = ["approve", "turn", "stuck"];
+// The panel's sections, in order.
+const GROUPS = [["you", "Needs you"], ["progress", "In progress"], ["waiting", "Waiting"], ["unknown", "Not summarized"], ["done", "Done"]];
+// Summaries written before these states: "you" and "others" (which mixed CI and people).
+const LEGACY = { you: "turn", others: "team" };
+const rankOf = (v) => STATES[v]?.rank ?? STATES.unknown.rank;
 
 const ago = (ms) => {
   const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
@@ -81,11 +101,12 @@ function child(space, tab, pane, x, depth) {
 // A child's verdict: live status first (working, blocked), then its cached summary.
 export function verdictOf(c, items) {
   if (c.status === "working") return { verdict: "working" };
-  if (c.status === "blocked") return { verdict: "you", summary: "Waiting for a permission prompt." };
+  if (c.status === "blocked") return { verdict: "approve", summary: "Waiting for a permission prompt." };
   if (!c.session) return { verdict: "unknown" };
   const item = items[c.id];
   if (!item) return { verdict: "unknown" };
-  return { ...item, verdict: item.verdict ?? "unknown", outdated: item.session !== c.session || item.turn !== c.turn };
+  const verdict = LEGACY[item.verdict] ?? (STATES[item.verdict] ? item.verdict : "unknown");
+  return { ...item, verdict, outdated: item.session !== c.session || item.turn !== c.turn };
 }
 
 // A working or blocked agent shows its live state, so a summary of it would not be shown.
@@ -174,13 +195,14 @@ export default class SpaceSummary extends View {
       .child(armed ? `${label}?` : label);
   }
 
-  chip(t, verdict) {
-    const color = { you: t.blocked, others: t.working, working: t.working, done: t.done }[verdict] ?? t.dim;
-    return h_flex().w(112).flex_none().gap(6).items_center().text_size(11.5).text_color(color)
-      .child(verdict === "working" ? svg(ICON("spinner")).size(11).spin(900)
-        : verdict === "done" ? svg(ICON("circle-check")).size(11)
+  chip(t, verdict, id) {
+    const s = STATES[verdict] ?? STATES.unknown;
+    return h_flex().id(`${id}-chip`).w(112).flex_none().gap(6).items_center()
+      .text_size(11.5).text_color(t[s.tone] ?? t.dim).tooltip(s.tip)
+      .child(verdict === "working" || verdict === "background" ? svg(ICON("spinner")).size(11).spin(verdict === "working" ? 900 : 2400)
+        : verdict === "done" || verdict === "optional" ? svg(ICON("circle-check")).size(11)
         : div().text_size(9).child("●"))
-      .child(LABEL[verdict]);
+      .child(s.label);
   }
 
   summaryCell(t, v, c) {
@@ -219,14 +241,14 @@ export default class SpaceSummary extends View {
           .when(locked, (el) => el.child(svg(ICON("pin")).size(11).flex_none().text_color(t.dim)))
           .child(div().id(`${id}-name`).truncate().tooltip(name).text_color(t.foreground).when(depth === 0, (el) => el.font_semibold()).child(name)))
         .when(Boolean(sub), (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(sub))))
-      .child(this.chip(t, verdict))
+      .child(this.chip(t, verdict, id))
       .child(summary)
       .child(h_flex().w(118).flex_none().gap(4).justify_end().children(actions));
   }
 
   spaceRows(t, { space, children }, items, locked) {
     const agents = children.map((c) => ({ c, v: verdictOf(c, items) }));
-    const rollup = agents.map(({ v }) => v.verdict).sort((a, b) => RANK[a] - RANK[b])[0];
+    const rollup = agents.map(({ v }) => v.verdict).sort((a, b) => rankOf(a) - rankOf(b))[0];
     const isLocked = Boolean(locked[space.id]);
     const close = this.button(t, `close-${space.id}`, "Close", isLocked ? "Locked: unlock it from the card menu first" : "Close this dev workspace and end its terminals",
       () => run("space.close", { id: space.id, confirmed: true }), { danger: true, disabled: isLocked });
@@ -238,13 +260,13 @@ export default class SpaceSummary extends View {
     const counts = `${agents.length} agent${agents.length > 1 ? "s" : ""}`;
     const collapsed = Boolean(collapsedSet()[space.id]);
     // Collapsed, the header carries the next step of its most urgent agent.
-    const urgent = agents.slice().sort((a, b) => RANK[a.v.verdict] - RANK[b.v.verdict])[0];
+    const urgent = agents.slice().sort((a, b) => rankOf(a.v.verdict) - rankOf(b.v.verdict))[0];
     const head = this.row(t, {
       id: `space-${space.id}`, name, locked: isLocked, verdict: rollup, header: true, art: this.art(space.id),
       collapsed, onToggle: () => setCollapsed(space.id, !collapsed),
       sub: [name !== space.name ? space.name : null, norm(space.folder) !== ROOT_FOLDER() ? space.folder : null].filter(Boolean).join(" · "),
       summary: v_flex().flex_1().min_w(0).gap(2).text_size(11.5).text_color(t.muted)
-        .child(`${counts} · ${agents.filter(({ v }) => v.verdict === "done").length} of ${agents.length} done`)
+        .child(`${counts} · ${agents.filter(({ v }) => STATES[v.verdict]?.group === "done").length} of ${agents.length} done`)
         .when(collapsed && Boolean(urgent?.v.next), (el) => el.child(div().text_color(t.foreground).child(`Next: ${urgent.v.next}`))),
       onJump: () => this.jump(agents.length === 1 ? agents[0].c : { space: space.id, tab: space.tabs.find((x) => x.active)?.id }),
       actions: [summarize(`sum-${space.id}`, agents.map(({ c }) => c.id), "Summarize the agents in this dev workspace (Haiku)"), close],
@@ -305,7 +327,25 @@ export default class SpaceSummary extends View {
         .child(div().flex_1().child("What is happening"))
         .child(div().w(118).flex_none().text_right().child("Actions")))
       .child(v_flex().id("summary-rows").flex_1().min_h(0).overflow_y_scrollbar()
-        .children(rows.flatMap((r) => this.spaceRows(t, r, items, locked)))
+        .children(this.grouped(t, rows, items, locked))
         .when(!rows.length, (el) => el.child(div().p(14).text_color(t.dim).child("No agents."))));
+  }
+
+  // Dev workspaces under a section per state group (Needs you, In progress, Waiting, ...): each
+  // goes where its most urgent agent puts it. Sidebar order holds inside a section.
+  grouped(t, rows, items, locked) {
+    const groupOf = (r) => STATES[r.children.map((c) => verdictOf(c, items).verdict).sort((a, b) => rankOf(a) - rankOf(b))[0]]?.group ?? "unknown";
+    const tagged = rows.map((r) => ({ r, group: groupOf(r) }));
+    return GROUPS.flatMap(([group, label]) => {
+      const mine = tagged.filter((x) => x.group === group);
+      if (!mine.length) return [];
+      const tone = group === "you" ? t.blocked : t.muted;
+      return [
+        h_flex().id(`group-${group}`).px(12).pt(14).pb(6).gap(8).items_center().border_t(1).border_color(t.border)
+          .text_size(11).font_semibold().text_color(tone)
+          .child(div().child(label.toUpperCase())).child(div().text_color(t.dim).child(String(mine.length))),
+        ...mine.flatMap(({ r }) => this.spaceRows(t, r, items, locked)),
+      ];
+    });
   }
 }

@@ -16,9 +16,19 @@ const TAIL_BYTES = 1.5 * 2 ** 20;
 const PROMPT_CHARS = 600;
 const REPLY_CHARS = 2800;
 
+// What Haiku may answer (space-summary/main.js draws them; "cleared" is set without Haiku).
+const VERDICTS = ["turn", "stuck", "background", "ci", "team", "optional", "done"];
+
 const SYSTEM = `You triage coding-agent sessions for a developer, Alex. Each session lists the agent's title, its dev workspace, Alex's latest prompts and the agent's latest replies.
 Reply with a JSON array only, one object per session: {"id", "verdict", "summary", "next"}.
-- verdict: "done" when the agent finished and nothing is left for it, so its workspace can close. "you" when it waits on Alex: a question, a decision, an approval, or a step only Alex can do. "others" when it waits on someone or something else: a reviewer, CI, a colleague's merge.
+- verdict: exactly one of these. Pick "turn" only when the agent truly cannot go on without Alex.
+  "turn": the agent stopped and needs Alex before it can continue: it asked a question or a choice, or it finished work Alex must review or approve before the next step (findings to post, a PR to mark ready or merge).
+  "stuck": it hit an error or gave up: a failing command it could not fix, missing access, a tool that broke.
+  "background": its turn ended, but its own work goes on and it will resume by itself: a running job or test, a monitor or CI watch it set up, a scheduled wake-up.
+  "ci": it waits on CI, a deploy or another automated process, and nothing of its own is watching it.
+  "team": it waits on a person other than Alex: a reviewer, a colleague, an org owner.
+  "optional": it finished; it only offered a follow-up Alex may take or ignore ("want me to...?", "I can also...").
+  "done": it finished and nothing is left, so its workspace can close.
 - summary: what the work is and where it stands. One sentence, at most 25 words. Name tickets and PRs.
 - next: the next action and who owns it, at most 15 words. "" when done.
 Plain words. No em dashes. No markdown.`;
@@ -126,7 +136,7 @@ if (blocks.length) {
     cost = out.total_cost_usd ?? 0;
     for (const x of parseArray(out.result)) {
       if (x?.id == null) continue;
-      items[x.id] = { verdict: ["done", "you", "others"].includes(x.verdict) ? x.verdict : null, summary: String(x.summary ?? ""), next: String(x.next ?? "") };
+      items[x.id] = { verdict: VERDICTS.includes(x.verdict) ? x.verdict : null, summary: String(x.summary ?? ""), next: String(x.next ?? "") };
     }
   } catch (e) {
     error = `Haiku call failed: ${String(e.message ?? e).slice(0, 200)}${r.stderr ? ` (${r.stderr.trim().slice(0, 200)})` : ""}`;

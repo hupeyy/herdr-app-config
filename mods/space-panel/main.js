@@ -5,7 +5,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, HoverCard } from "gpui-base";
-import { spaces, agents, terminals, panes, run, theme, shared, setShared, setAgentOrder, knownAgents, props, openOverlay, closeOverlay, exec, home, appHome, readTextFile, writeTextFile, playSound } from "herdr";
+import { spaces, agents, terminals, panes, run, theme, shared, setShared, setAgentOrder, knownAgents, props, openOverlay, closeOverlay, exec, home, appHome, readTextFile, writeTextFile, playSound, settings } from "herdr";
 import { fileIcon, isLight } from "./file-icons/icons.js";
 import { NAMES, nameOf, ICON_LAST, iconBox } from "./pokemon-names.js";
 import { loadSprite, VERSION as SPRITE_VERSION } from "./pokemon-sprites.js";
@@ -15,6 +15,14 @@ import { loadSprite, VERSION as SPRITE_VERSION } from "./pokemon-sprites.js";
 // none ship with this mod. A new dev workspace gets a random Pokémon nobody else has, saved so it
 // stays; the Edit dialog (space-new) picks another. Saved in shared "space.pokemon" { spaceId: dex }.
 const POKEMON = "space.pokemon";
+// A Pokémon given to a dev workspace (a new one, or a new pick in the Edit dialog) is shiny one time
+// in 100, like a shiny encounter. Saved in shared "space.shiny" { spaceId: true }.
+export const SHINY = "space.shiny";
+export const SHINY_ODDS = 0.01;
+// A sprite's cache key: the dex number, with "s" for its shiny ("25", "25s").
+const spriteKey = (n, shiny) => `${n}${shiny ? "s" : ""}`;
+const dexOf = (key) => parseInt(key, 10);
+const isShinyKey = (key) => String(key).endsWith("s");
 const POKEMON_DIR = "data/pokemon-icons";
 const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites";
 // Menu icons up to #809, then the 96x96 front sprites (no icons exist past Gen 7).
@@ -44,14 +52,17 @@ function pendingPick(id, key) {
 function pokemonFor(ids) {
   const saved = shared(POKEMON) ?? {};
   const fresh = {};
+  const shiny = {};
   const used = new Set(Object.values(saved));
   for (const id of ids) {
     if (saved[id]) continue;
     const free = NAMES.map((_, i) => i + 1).filter((n) => !used.has(n));
     const n = pendingPick(id, "pokemon") ?? (free.length ? free[Math.floor(Math.random() * free.length)] : Math.floor(Math.random() * POKEMON_COUNT) + 1);
     fresh[id] = n;
+    if (Math.random() < SHINY_ODDS) shiny[id] = true;
     used.add(n);
   }
+  if (Object.keys(shiny).length) setShared(SHINY, { ...(shared(SHINY) ?? {}), ...shiny });
   if (Object.keys(fresh).length) setShared(POKEMON, { ...saved, ...fresh });
   return { ...saved, ...fresh };
 }
@@ -141,9 +152,20 @@ const JIRA_BLUE = "#2684FF";
 // Locked dev workspaces, set from the card menu (menu-spaces): no close, no moving tabs out.
 const LOCKED = "space.locked";
 const isLocked = (id) => Boolean((shared(LOCKED) ?? {})[id]);
+// Where a tab can move from the menu: the other dev workspaces of its root workspace.
+function moveTargets(spaceId) {
+  const rootOf = shared("space.root") ?? {};
+  return spaces().filter((s) => s.id !== spaceId && rootOf[s.id] === rootOf[spaceId]);
+}
+// A locked dev workspace cannot be closed, so its only tab cannot leave (that would close it).
+function canMove(move) {
+  if (!move || !moveTargets(move.space).length) return false;
+  return !isLocked(move.space) || (spaces().find((s) => s.id === move.space)?.tabs.length ?? 0) > 1;
+}
 // A confirmed tab move, posted by the confirm popup (its own instance) to the sidebar.
 const MOVE_REQUEST = "space-panel.move";
 const DRAG_START_PX = 6;
+const COMPACT_PX = 120; // under this drawn width the cards show only the Poké Ball and the Pokémon
 const AGENT_POLL_MS = 5000;
 // { paneId: agentId } written by each agent-view tab, so a click focuses an open one.
 const AGENT_TABS = "agent.tabs";
@@ -195,6 +217,7 @@ function openTask(target) {
 function rowActions(m) {
   if (m.tab) return [
     { id: "rename", label: "Rename…", icon: "square-pen" },
+    ...(canMove(m.move) ? [{ id: "move", label: "Move to…", icon: "folder" }] : []),
     { id: "close", label: m.split ? "Close tab and its panes" : "Close", icon: "x", run: () => run("tab.close", { id: m.tab }) },
   ];
   if (m.terminal) return [
@@ -279,9 +302,8 @@ export default class DevWorkspaces extends View {
   init(_props, cx) {
     this.expanded = new Map(); // spaceId -> true/false, set by the card's chevron
     this.agentChoices = [];
-    this.drag = null; // { tab, space, name, label } while a tab row is held down
-    this.dropTarget = null; // the card under the pointer during a drag
-    // A press arms a drag; it starts only once the pointer moves. Selecting a dev workspace
+    this.dropTarget = null; // the card under the pointer during a card drag
+    // A press arms a card drag; it starts only once the pointer moves. Selecting a dev workspace
     // reflows the cards, so a plain click could otherwise release on another card and move.
     this.press = null; // { x, y } of the press
     this.moved = false;
@@ -313,7 +335,7 @@ export default class DevWorkspaces extends View {
     this.pokemonReady = false;
     cx.spawn(async (cx) => { this.pokemonReady = await ensurePokemonIcons(); cx.notify(); });
     this.ballsReady = new Set(); // designs whose frames are drawn
-    this.sprites = new Map(); // dex -> pokemon-sprites.js's { path, w, h, source }, "pending" or null
+    this.sprites = new Map(); // spriteKey ("25", "25s") -> pokemon-sprites.js's { path, w, h, source }, "pending" or null
     // Steps the Poké Ball animations; redraws only while some dev workspace is working or has a
     // shell running. One tick serves both cycles (22 and 18 frames).
     this.ballTick = 0;
@@ -459,12 +481,13 @@ export default class DevWorkspaces extends View {
     return h_flex().id(r.id).pl(6 + r.depth * 16).pr(6).h(26).flex_none().gap(6).items_center().rounded(6)
       .cursor_pointer().when(r.focused, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { cx.stop_propagation(); r.onClick(cx); })
-      .when(Boolean(r.drag), (el) => el
-        .when(this.moved && this.drag?.tab === r.drag.tab && this.dropTarget && this.dropTarget !== r.drag.space, (el) => el.opacity(0.5))
-        .on_mouse_down("left", (e) => { this.drag = r.drag; this.dropTarget = null; this.arm(e); }))
+      // Tabs move only through Move to…: a press on a row never starts a card drag either.
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .when(Boolean(r.menu), (el) => el.on_mouse_down("right", (_e, cx) => {
         cx.stop_propagation();
-        openOverlay({ mod: "space-panel", kind: "popup", width: 230, height: 44 + 30 * rowActions(r.menu).length, props: { rowMenu: r.menu } });
+        // Tall enough for the Move to… list too, which replaces the actions in the same popup.
+        const lines = Math.max(rowActions(r.menu).length, r.menu.move ? Math.min(8, moveTargets(r.menu.move.space).length + 1) : 0);
+        openOverlay({ mod: "space-panel", kind: "popup", width: 230, height: 44 + 30 * lines, props: { rowMenu: r.menu } });
       }))
       .when(r.depth > 0, (el) => el.child(div().w(8).h(12).mt(-6).flex_none().border_l(1.5).border_b(1.5).rounded_bl(5).border_color(t.input)))
       .when(Boolean(r.shell), (el) => el.tooltip(`Running ${r.shell.count > 1 ? `${r.shell.count} shells` : "a shell"}: ${r.shell.cmd}`))
@@ -536,16 +559,15 @@ export default class DevWorkspaces extends View {
       if (!lead) continue;
       // An unnamed tab is called by its number; the lead pane's name says more.
       const label = tab.named ? tab.name : paneName(lead);
-      const tabMenu = { tab: tab.id, name: tab.named ? tab.name : "", label, split: inTab.length > 1 };
-      // A locked dev workspace keeps its tabs: its rows cannot be dragged out.
-      const drag = isLocked(space.id) ? undefined : { tab: tab.id, space: space.id, name: tab.named ? tab.name : null, label };
+      const move = { tab: tab.id, space: space.id, name: tab.named ? tab.name : null, label };
+      const tabMenu = { tab: tab.id, name: tab.named ? tab.name : "", label, split: inTab.length > 1, move };
       if (inTab.length === 1) {
-        rows.push({ ...paneRow(lead, 0, label, tab.active, tabMenu), drag });
+        rows.push(paneRow(lead, 0, label, tab.active, tabMenu));
         if (lead.terminal) addKids(lead.terminal, 1);
         continue;
       }
       rows.push({ id: `tab-${tab.id}`, depth: 0, status: tab.status, program: { icon: ICON("panel-right"), tint: true },
-        name: label, msg: `${inTab.length} panes`, focused: false, menu: tabMenu, drag,
+        name: label, msg: `${inTab.length} panes`, focused: false, menu: tabMenu,
         onClick: () => { run("space.select", { id: space.id }); run("tab.select", { id: tab.id }); } });
       for (const pane of inTab) {
         rows.push(paneRow(pane, 1, paneName(pane), tab.active, { pane: pane.pane }));
@@ -617,27 +639,38 @@ export default class DevWorkspaces extends View {
     const latest = rows.filter((r) => r.status && !/^(agent|sub)-/.test(r.id))
       .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || (b.at ?? 0) - (a.at ?? 0))[0];
     const menuHeight = 44 + 30 * (this.agentChoices.length + (space.active ? 4 : 3));
-    const dropping = this.moved && Boolean(this.drag) && this.dropTarget === space.id && this.drag.space !== space.id;
+
+    // Narrow sidebar: the Poké Ball above the Pokémon, one card per dev workspace.
+    if (ctx.compact) {
+      return v_flex().id(`card-${space.id}`).mx(4).mt(6).py(6).gap(4).flex_none().items_center().rounded(10)
+        .bg(space.active ? t.surface : t.chrome).border_1().border_color(space.active ? t.input : t.border)
+        .cursor_pointer().hover((s) => s.border_color(t.input)).tooltip(title)
+        .on_click(() => run("space.select", { id: space.id }))
+        .on_mouse_down("right", (_e, cx) => {
+          cx.stop_propagation();
+          openOverlay({ mod: "menu-spaces", kind: "popup", width: 200, height: 290, props: { tab: "space", target: { id: space.id } } });
+        })
+        .child(mark)
+        .when(this.pokemonReady && Boolean(this.pokemon?.[space.id]), (el) => el.child(this.pokemonButton(space, { compact: true })));
+    }
 
     return v_flex().id(`card-${space.id}`).mx(8).mt(8).p(8).gap(3).flex_none().rounded(10)
-      .bg(dropping ? t.selected : space.active ? t.surface : t.chrome)
-      .border_1().border_color(dropping ? t.accent : space.active ? t.input : t.border)
+      .bg(space.active ? t.surface : t.chrome)
+      .border_1().border_color(space.active ? t.input : t.border)
       .cursor_pointer().hover((s) => s.border_color(t.input))
       .on_click(() => run("space.select", { id: space.id }))
       .when(this.moved && this.cardDrag === space.id && this.dropTarget && this.dropTarget !== space.id, (el) => el.opacity(0.5))
-      // A press on a tab row starts a tab drag (that row's handler runs first); anywhere else on
-      // the card starts a card drag, which reorders the dev workspaces.
-      .on_mouse_down("left", (e) => { if (!this.drag) { this.cardDrag = space.id; this.dropTarget = null; this.arm(e); } })
+      // A press on the card (not on a tab row) starts a card drag, which reorders the dev workspaces.
+      .on_mouse_down("left", (e) => { if (!isLocked(space.id)) { this.cardDrag = space.id; this.dropTarget = null; this.arm(e); } })
       .on_hover((on, cx) => {
-        if (!this.moved || (!this.drag && !this.cardDrag)) return;
+        if (!this.moved || !this.cardDrag) return;
         if (on) this.dropTarget = space.id; else if (this.dropTarget === space.id) this.dropTarget = null;
         cx.notify();
       })
       .on_mouse_up("left", (_e, cx) => {
-        const moved = this.moved, d = this.drag, c = this.cardDrag;
-        this.drag = null; this.cardDrag = null; this.dropTarget = null; this.press = null; this.moved = false;
+        const moved = this.moved, c = this.cardDrag;
+        this.cardDrag = null; this.dropTarget = null; this.press = null; this.moved = false;
         if (!moved) { cx.notify(); return; }
-        if (d && d.space !== space.id) this.askMoveTab(d, space, folder);
         // space.move takes a 1-based place among all spaces; the target's place is where it lands.
         if (c && c !== space.id) run("space.move", { id: c, index: spaces().findIndex((s) => s.id === space.id) + 1 });
         cx.notify();
@@ -685,11 +718,12 @@ export default class DevWorkspaces extends View {
     const art = {};
     for (const s of spaces()) {
       const n = this.pokemon?.[s.id];
-      const sprite = this.sprites.get(n);
+      const sprite = this.sprites.get(this.keyOf(s.id));
       const d = this.balls?.[s.id] ?? "classic";
+      const name = n && `${this.shiny?.[s.id] ? "Shiny " : ""}${nameOf(n)}`;
       art[s.id] = {
-        pokemon: !n ? null : sprite?.path ? { path: sprite.path, w: sprite.w, h: sprite.h, name: nameOf(n) }
-          : { ...iconBox(n, 20), path: `${POKEMON_DIR}/${n}.png`, name: nameOf(n) },
+        pokemon: !n ? null : sprite?.path ? { path: sprite.path, w: sprite.w, h: sprite.h, name }
+          : { ...iconBox(n, 20), path: `${POKEMON_DIR}/${n}.png`, name },
         ball: this.ballsReady.has(d) ? { sheet: ballName(d, "sheet"), cells: SHEET_CELLS } : null,
       };
     }
@@ -701,7 +735,7 @@ export default class DevWorkspaces extends View {
   loadSprites(cx) {
     // Update sprites (space-new's Edit dialog) sets shared SPRITE_REFRESH: anything older is fetched again.
     const since = shared(SPRITE_REFRESH) ?? 0;
-    const inUse = [...new Set(Object.values(this.pokemon ?? {}))];
+    const inUse = [...new Set(Object.keys(this.pokemon ?? {}).map((id) => this.keyOf(id)))];
     this.publishSpriteProgress(inUse, since);
     if (this.loadingSprite) return;
     // Sprites from an older recipe (pokemon-sprites.js's VERSION) are rebuilt too.
@@ -713,7 +747,7 @@ export default class DevWorkspaces extends View {
     this.loadingSprite = true;
     this.sprites.set(n, "pending");
     cx.spawn(async (cx) => {
-      const got = await loadSprite(n, since).catch(() => ({ retryAt: Date.now() + SPRITE_RETRY_MS }));
+      const got = await loadSprite(dexOf(n), since, isShinyKey(n)).catch(() => ({ retryAt: Date.now() + SPRITE_RETRY_MS }));
       this.sprites.set(n, got ?? { none: true, at: Date.now() });
       this.loadingSprite = false;
       cx.notify();
@@ -748,8 +782,10 @@ export default class DevWorkspaces extends View {
   // The animated GIF, fitted into w x h keeping its shape; else (and until it is built) the still
   // icon. image() steps a GIF only when the window redraws, so beside it a speck pulses natively
   // (no script runs for it) and keeps the window redrawing.
-  pokemonArt(n, w, h) {
-    const sprite = this.sprites.get(n);
+  // key: spriteKey; until a shiny's sprite is built, the normal still icon stands in.
+  pokemonArt(key, w, h) {
+    const n = dexOf(key);
+    const sprite = this.sprites.get(key);
     const fit = sprite?.path ? Math.min(w / sprite.w, h / sprite.h) : 0;
     return fit ? h_flex().items_center()
         .child(image(sprite.path).w(Math.round(sprite.w * fit)).h(Math.round(sprite.h * fit)))
@@ -760,28 +796,37 @@ export default class DevWorkspaces extends View {
   // The dev workspace's Pokémon beside its title; a click plays its cry and opens the Edit dialog.
   // Resting the pointer on it opens a card with the sprite at up to its GIF's own size (scaling
   // past it blurs the pixels), its name and its National Dex number; a click on the card cries too.
-  pokemonButton(space) {
+  // compact (the narrow sidebar): a click cries and selects the dev workspace, with no Edit dialog.
+  pokemonButton(space, { compact = false } = {}) {
     const t = theme();
     const n = this.pokemon[space.id];
+    const key = this.keyOf(space.id);
+    const shiny = isShinyKey(key);
     const slot = div().id(`poke-${space.id}`).w(30).h(20).flex_none().flex().items_center().justify_center().cursor_pointer()
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
         const cry = this.cries.get(n);
         if (cry) playSound(cry);
-        openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 680, props: { edit: space.id } });
+        if (compact) run("space.select", { id: space.id });
+        else openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 680, props: { edit: space.id } });
       })
-      .child(this.pokemonArt(n, 30, 24));
-    const sprite = this.sprites.get(n);
+      .child(this.pokemonArt(key, 30, 24));
+    const sprite = this.sprites.get(key);
     const w = sprite?.path ? Math.min(sprite.w, CARD_ART) : CARD_ART, h = sprite?.path ? Math.min(sprite.h, CARD_ART) : CARD_ART * 3 / 4;
     return HoverCard.new(`poke-card-${space.id}`).open_delay(250).close_delay(150).anchor("top_left")
       .trigger(slot)
       .content(v_flex().id(`poke-card-body-${space.id}`).w(160).p(12).gap(6).items_center().rounded(10).bg(t.popover).border_1().border_color(t.border)
         .cursor_pointer().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click((_e, cx) => { cx.stop_propagation(); const cry = this.cries.get(n); if (cry) playSound(cry); })
-        .child(div().w(CARD_ART).h(CARD_ART).flex().items_center().justify_center().child(this.pokemonArt(n, w, h)))
+        .child(div().w(CARD_ART).h(CARD_ART).flex().items_center().justify_center().child(this.pokemonArt(key, w, h)))
         .child(div().text_size(14).font_semibold().text_color(t.foreground).child(nameOf(n)))
+        .when(shiny, (el) => el.child(div().px(8).h(18).flex().items_center().rounded(9).bg(t.working).text_color("#1b1b1b").text_size(11).font_semibold().child("✦ Shiny")))
         .child(div().text_size(12).text_color(t.muted).child(`No. ${String(n).padStart(4, "0")}`)));
+  }
+
+  keyOf(spaceId) {
+    return spriteKey(this.pokemon?.[spaceId], this.shiny?.[spaceId]);
   }
 
   arm(e) {
@@ -789,20 +834,12 @@ export default class DevWorkspaces extends View {
     this.moved = false;
   }
 
-  // Moving a dev workspace's only tab closes that dev workspace (herdr closes a space with no
-  // tabs), so that move asks first.
-  askMoveTab(drag, target, folder) {
-    const from = spaces().find((s) => s.id === drag.space);
-    if (!from || from.tabs.length > 1) { this.moveTab(drag, target, folder); return; }
-    openOverlay({ mod: "space-panel", kind: "dialog", width: 400, height: 180, props: {
-      moveConfirm: { drag, target: target.id, folder, from: from.name, to: target.name },
-    } });
-  }
-
+  // Moving a dev workspace's only tab closes it (herdr closes a space with no tabs), so moveMenu
+  // asks here first.
   moveConfirm(t) {
     const m = props().moveConfirm;
     const close = () => closeOverlay(props().overlay);
-    const yes = () => { close(); setShared(MOVE_REQUEST, { drag: m.drag, target: m.target, folder: m.folder, at: Date.now() }); };
+    const yes = () => { close(); setShared(MOVE_REQUEST, { move: m.move, target: m.target, folder: m.folder, at: Date.now() }); };
     const button = (id, label, bg, fg, onClick) => h_flex().id(id).h(32).px(14).items_center().rounded(8).border_1()
       .border_color(id === "no" ? t.input : bg).bg(bg).text_color(fg).cursor_pointer().hover((s) => s.opacity(0.88))
       .on_click(onClick).child(label);
@@ -812,7 +849,7 @@ export default class DevWorkspaces extends View {
         cx.stop_propagation();
       })
       .child(div().text_size(15).font_semibold().text_color(t.foreground).child(`Close "${m.from}"?`))
-      .child(div().text_color(t.muted).child(`"${m.drag.label}" is its only tab. Moving it to "${m.to}" closes "${m.from}".`))
+      .child(div().text_color(t.muted).child(`"${m.move.label}" is its only tab. Moving it to "${m.to}" closes "${m.from}".`))
       .child(div().flex_1())
       .child(h_flex().gap(8).justify_end()
         .child(button("no", "Cancel", t.popover, t.foreground, close))
@@ -822,25 +859,26 @@ export default class DevWorkspaces extends View {
   // herdr has no "move tab to space" command. Parking takes a terminal's pane away and keeps
   // it running; keeping it again opens it as a tab in the selected space. A source tab left with
   // only mod panes is closed, and a mod-only tab (Files) is reopened in the target's folder.
-  moveTab(drag, target, targetFolder) {
-    if (isLocked(drag.space)) return;
-    const inTab = panes().filter((p) => p.tab === drag.tab);
+  // A locked dev workspace's tabs may move too; canMove keeps its last tab.
+  moveTab(move, target, targetFolder) {
+    if (!canMove(move)) return;
+    const inTab = panes().filter((p) => p.tab === move.tab);
     const terms = inTab.filter((p) => p.terminal);
     const mods = inTab.filter((p) => !p.terminal);
     if (!terms.length) {
       // A file tab reopens on the same file (file-view records it in shared "file.tabs").
       const files = shared("file.tabs") ?? {};
-      run("tab.close", { id: drag.tab });
+      run("tab.close", { id: move.tab });
       for (const p of mods) {
         const was = files[p.pane];
-        run("tab.new", { space: target.id, mod: p.mod, name: drag.name ?? "Files", props: was ? { root: was.root, ...(was.file ? { file: was.file } : {}) } : { root: targetFolder } });
+        run("tab.new", { space: target.id, mod: p.mod, name: move.name ?? "Files", props: was ? { root: was.root, ...(was.file ? { file: was.file } : {}) } : { root: targetFolder } });
       }
       return;
     }
     for (const p of terms) run("terminal.park", { terminal: p.terminal });
     this.pending.push({
       stage: "parking", terminals: terms.map((p) => p.terminal), kept: 0, target: target.id,
-      from: drag.tab, name: drag.name, closeFrom: mods.length > 0, at: Date.now(),
+      from: move.tab, name: move.name, closeFrom: mods.length > 0, at: Date.now(),
     });
   }
 
@@ -911,10 +949,12 @@ export default class DevWorkspaces extends View {
 
   rowMenu(t) {
     const m = props().rowMenu;
+    if (this.moving) return this.moveMenu(t, m);
     if (!this.renaming) {
       const items = rowActions(m).map((a) => ({ ...a, action: a.run ?? (() => {}) }));
       const pick = (a) => (_e, cx) => {
         if (a.id === "rename") { this.renaming = true; this.newName.focus(); cx.notify(); return; }
+        if (a.id === "move") { this.moving = true; cx.notify(); return; }
         closeOverlay(props().overlay);
         a.action();
       };
@@ -933,6 +973,32 @@ export default class DevWorkspaces extends View {
         .child(Input.new(this.newName).flex_1().h_full().text_color(t.foreground)));
   }
 
+  // Move to…: the tab's other dev workspaces. The move runs in the sidebar copy (it owns settle()),
+  // through the same MOVE_REQUEST as a drop; moving a dev workspace's only tab asks first.
+  moveMenu(t, m) {
+    const from = spaces().find((s) => s.id === m.move.space);
+    const go = (s) => () => {
+      closeOverlay(props().overlay);
+      if (!canMove(m.move)) return;
+      if (from && from.tabs.length <= 1) {
+        openOverlay({ mod: "space-panel", kind: "dialog", width: 400, height: 180, props: {
+          moveConfirm: { move: m.move, target: s.id, folder: s.folder, from: from.name, to: s.name },
+        } });
+      } else setShared(MOVE_REQUEST, { move: m.move, target: s.id, folder: s.folder, at: Date.now() });
+    };
+    // The popup sizes to its content, so the list needs its own height (flex_1 collapses to 0).
+    const targets = moveTargets(m.move.space);
+    return v_flex().size_full().p(5).bg(t.popover).text_size(12.8)
+      .child(div().px(8).pt(4).pb(6).truncate().text_size(11).text_color(t.dim).child(`Move "${m.label ?? "tab"}" to`))
+      .child(v_flex().id("move-targets").flex_none().h(30 * Math.min(7, targets.length)).overflow_y_scrollbar()
+        .children(targets.map((s) => h_flex().id(`move-${s.id}`).h(30).px(8).gap(9).flex_none().items_center().rounded(7)
+          .text_color(t.foreground).cursor_pointer().hover((el) => el.bg(t.hover))
+          .on_click(go(s))
+          .child(svg(ICON("folder")).size(14).flex_none().text_color(t.muted))
+          .child(div().flex_1().truncate().child(s.name))
+          .when(isLocked(s.id), (el) => el.child(svg("mods/file-icons/ui/lock.svg").size(11).flex_none().text_color(t.dim))))));
+  }
+
   newMenu(t) {
     const { root } = props().newMenu;
     return this.popup(t, [
@@ -949,6 +1015,7 @@ export default class DevWorkspaces extends View {
     if (props()?.rowMenu) return this.rowMenu(t);
     if (props()?.moveConfirm) return this.moveConfirm(t);
     this.pokemon = pokemonFor(spaces().map((s) => s.id));
+    this.shiny = shared(SHINY) ?? {};
     this.loadSprites(_cx);
     this.loadCries(_cx);
     this.balls = ballsFor(spaces().map((s) => s.id));
@@ -963,7 +1030,7 @@ export default class DevWorkspaces extends View {
     const request = shared(MOVE_REQUEST);
     if (request && Number(request.at) > this.lastMove) {
       this.lastMove = Number(request.at);
-      this.moveTab(request.drag, { id: request.target }, request.folder);
+      this.moveTab(request.move, { id: request.target }, request.folder);
     }
 
     const activeSpace = spaces().find((s) => s.active);
@@ -975,6 +1042,7 @@ export default class DevWorkspaces extends View {
     const ctx = {
       allPanes: withClaude(panes(), all), all, byAddress: new Map(all.map((x) => [x.address, x])), allAgents: agents(), snap, light: isLight(t.background),
       prs: [...(snap?.mine ?? []), ...(snap?.review ?? [])],
+      compact: (this.width ?? Infinity) < COMPACT_PX,
     };
     this.settle(ctx.allPanes);
     setAgentOrder(ctx.allAgents.filter((a) => mine.some((s) => s.id === a.space)).map((a) => a.address));
@@ -988,6 +1056,12 @@ export default class DevWorkspaces extends View {
       }))));
 
     return v_flex().id("dev-workspaces").size_full().min_h(0).bg(t.chrome).text_size(13)
+      .on_size_change((size, cx) => {
+        const width = size.width / (settings().zoom || 1);
+        if (Math.abs((this.width ?? -1) - width) < 1) return;
+        this.width = width;
+        cx.notify();
+      })
       .on_mouse_move((e, cx) => {
         if (!this.press || this.moved) return;
         if (Math.hypot(e.position.x - this.press.x, e.position.y - this.press.y) < DRAG_START_PX) return;
@@ -995,9 +1069,13 @@ export default class DevWorkspaces extends View {
         cx.notify();
       })
       .on_mouse_up("left", (_e, cx) => {
-        if (this.drag || this.cardDrag) { this.drag = null; this.cardDrag = null; this.dropTarget = null; this.press = null; this.moved = false; cx.notify(); }
+        if (this.cardDrag) { this.cardDrag = null; this.dropTarget = null; this.press = null; this.moved = false; cx.notify(); }
       })
-      .child(header)
+      .when(!ctx.compact, (el) => el.child(header))
+      .when(ctx.compact && Boolean(root), (el) => el.child(h_flex().pt(10).pb(2).flex_none().justify_center()
+        .child(this.iconButton(t, "new-dev", "plus", "New dev workspace", () => openOverlay({
+          mod: "space-panel", kind: "popup", width: 230, height: 140, props: { newMenu: { root: root.id } },
+        })))))
       .child(v_flex().id("dev-workspace-list").flex_1().min_h(0).pb(10).overflow_y_scrollbar()
         .children(mine.flatMap((s) => {
           // During a card drag, a line shows where the card will land: above the target when it
