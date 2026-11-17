@@ -26,6 +26,7 @@ export default class Learn extends View {
     this.stats = null;
     try { this.showSkills = localStorage.getItem("skills") !== "0"; } catch { this.showSkills = true; }
     this.text = TextareaState.new({ placeholder: "Your answer, in your own words", rows: 5 });
+    this.text.on("change", (_e, cx) => { if (this.error && !this.busy) { this.error = ""; cx.notify(); } });
     this.reload(cx);
     // `herdr-app check` renders once, before any load finishes: give it stats so the RPG view is drawn.
     if (checking()) {
@@ -63,8 +64,12 @@ export default class Learn extends View {
 
   submit(q, cx) {
     const input = q.kind === "choose" ? { option: this.pick } : { text: this.text.value().trim() };
-    if (q.kind === "choose" ? this.pick === null : !input.text) return;
+    if (q.kind === "choose" ? this.pick === null : !input.text) {
+      this.error = q.kind === "choose" ? "Pick an option first." : "Write an answer first.";
+      cx.notify(); return;
+    }
     this.busy = true; this.error = "";
+    cx.notify();
     cx.spawn(async (cx) => {
       // Free-text answers are graded by claude -p, which can take a minute.
       const r = await exec("node", [SCRIPT(), "answer", q.id, JSON.stringify(input)], { timeout: 240000 }).catch((e) => ({ code: 1, stderr: String(e) }));
@@ -161,12 +166,13 @@ export default class Learn extends View {
         const mine = answered ? r.option === i : this.pick === i, correct = answered && q.answer.correct === i;
         return v_flex().id(`opt-${i}`).p(8).gap(2).rounded(8).border(1)
           .border_color(correct ? t.done : mine ? t.accent : t.border).bg(mine ? t.selected : t.surface)
-          .when(!answered, (el) => el.hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.pick = i; cx.notify(); }))
+          .when(!answered, (el) => el.hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.pick = i; this.error = ""; cx.notify(); }))
           .child(div().text_size(12.5).text_color(t.foreground).child(`${String.fromCharCode(65 + i)}. ${o.label}`))
           .when(Boolean(o.detail), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(o.detail)));
       })));
     } else if (!answered) {
-      body.child(Textarea.new(this.text).w_full().text_size(12.5));
+      body.child(div().w_full().p(6).rounded(6).border(1).border_color(t.border).bg(t.surface)
+        .child(Textarea.new(this.text).w_full().text_size(12.5)));
     } else {
       body.child(this.section(t, "Your answer", div().text_size(12.5).text_color(t.muted).child(md(`mine-${q.id}`, r.text))));
     }
@@ -174,9 +180,13 @@ export default class Learn extends View {
     if (!answered) {
       body.child(h_flex().gap(8).items_center()
         .child(div().id("submit").px(12).h(28).flex().items_center().rounded(6).text_size(12.5)
-          .bg(t.solid).text_color(t.solid_foreground).when(!this.busy, (el) => el.on_click((_e, cx) => this.submit(q, cx)))
+          .bg(t.solid).text_color(t.solid_foreground).when(this.busy, (el) => el.opacity(0.6))
+          .when(!this.busy, (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.submit(q, cx)))
           .child(this.busy ? (q.kind === "choose" ? "Checking…" : "Grading…") : "Submit"))
-        .when(this.busy && q.kind !== "choose", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(900))));
+        .when(this.busy, (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(900)))
+        .when(this.busy && q.kind !== "choose", (el) => el.child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).child("This can take a minute.")))
+        // Beside the button, so it shows without scrolling.
+        .when(!this.busy && Boolean(this.error), (el) => el.child(div().flex_1().min_w(0).text_size(11.5).text_color(t.ansi1).child(this.error))));
     } else {
       const v = r.verdict;
       body.child(v
@@ -192,7 +202,7 @@ export default class Learn extends View {
       if (q.answer.seniorLens) body.child(this.section(t, "Senior lens", div().text_size(12.5).text_color(t.foreground).child(md(`lens-${q.id}`, q.answer.seniorLens))));
       if (q.answer.readMore) body.child(this.section(t, "Read more", div().text_size(12).text_color(t.muted).child(q.answer.readMore)));
     }
-    if (this.error) body.child(div().text_size(11.5).text_color(t.ansi1).child(this.error));
+    if (answered && this.error) body.child(div().text_size(11.5).text_color(t.ansi1).child(this.error));
 
     return v_flex().size_full().min_h(0)
       .child(h_flex().px(10).pt(8).pb(6).items_center()
