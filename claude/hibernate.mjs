@@ -5,12 +5,13 @@
 //   node hibernate.mjs sleep <terminal>                 hibernate one pane now (still refuses a busy one)
 //   node hibernate.mjs wake <terminal>                  resume it in place and wait for the prompt
 //   node hibernate.mjs ls                               hibernated panes
+//   node hibernate.mjs on|off|status                    the switch: while off, tick hibernates nothing (wake still works)
 //
 // Labels: claude.hibernated=<ISO time> marks a hibernated pane. herdr-resume.ps1 keeps the session
 // labels on /exit while it is set, skips the reboot resume, and clears it at the next SessionStart.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { freemem } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,9 @@ const PRESSURE_GB = 3;        // under this much free RAM, hibernate sooner...
 const TARGET_GB = 4;          // ...oldest first, until back above this
 const PRESSURE_IDLE_MIN = 5;  // even under pressure, never a pane that finished a turn this recently
 const GB = 2 ** 30;
+// The switch is a file, so the mod's chip and a shell agree on it (data/ is not tracked).
+const OFF_FILE = new URL("../data/hibernate.off", import.meta.url);
+const isOff = () => existsSync(OFF_FILE);
 
 // Run from an agent's pane, hc sends text as a message from that terminal (<hc from="t2">), and
 // Claude reads "/exit" as chat, not a command. Without HC_TERMINAL_ID it types like a person.
@@ -95,6 +99,7 @@ async function hibernate(p) {
 }
 
 async function tick(opt) {
+  if (isOff()) return { off: true, freeGb: +(freemem() / GB).toFixed(2), hibernated: [], skipped: {}, failed: [] };
   const keep = new Set((opt.keep ?? "").split(",").filter(Boolean));
   const panes = claudePanes().sort((a, b) => (a.session?.statusUpdatedAt ?? 0) - (b.session?.statusUpdatedAt ?? 0));
   const result = { freeGb: +(freemem() / GB).toFixed(2), hibernated: [], skipped: {}, failed: [] };
@@ -141,6 +146,9 @@ for (let i = 0; i < args.length; i++) {
 try {
   let out;
   if (cmd === "tick") out = await tick(opt);
+  else if (cmd === "off") { writeFileSync(OFF_FILE, new Date().toISOString()); out = { off: true }; }
+  else if (cmd === "on") { rmSync(OFF_FILE, { force: true }); out = { off: false }; }
+  else if (cmd === "status") out = { off: isOff() };
   else if (cmd === "wake") out = await wake(arg);
   else if (cmd === "sleep") {
     const p = claudePanes().find((x) => x.t === arg);
@@ -150,7 +158,7 @@ try {
     out = JSON.parse(hc("ls", "--json")).terminals.filter((x) => x.state === "live")
       .map((x) => ({ t: x.address, labels: getTerminal(x.address).labels ?? {} }))
       .filter((x) => x.labels["claude.hibernated"]).map((x) => ({ terminal: x.t, since: x.labels["claude.hibernated"], session: x.labels["claude.session"] }));
-  } else { console.error("usage: hibernate.mjs tick [--keep t1,t2] [--dry-run] | sleep <t> | wake <t> | ls"); process.exit(2); }
+  } else { console.error("usage: hibernate.mjs tick [--keep t1,t2] [--dry-run] | sleep <t> | wake <t> | ls | on | off | status"); process.exit(2); }
   process.stdout.write(JSON.stringify(out) + "\n");
 } catch (e) {
   console.error(String(e.message ?? e));

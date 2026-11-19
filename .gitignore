@@ -25,6 +25,7 @@
 !/mods/agents-space/
 !/mods/browser/
 !/mods/file-icons/
+!/mods/chrome-dev/
 !/mods/hibernate/
 !/mods/learn/
 !/mods/file-view/
@@ -44,3 +45,10 @@
 # Written by herdr into each mod on start.
 gpui-kit.d.ts
 *.error
+
+# Our own dark themes (orange/grey, teal/slate, plum/grey); Herdr ships atom-one-dark itself.
+/themes/*
+!/themes/
+!/themes/ember.json
+!/themes/tide.json
+!/themes/dusk.json

@@ -18,7 +18,7 @@
               "id": "brand",
               "type": "block",
               "content": {
-                "mod": "workspace-chrome"
+                "mod": "chrome-dev"
               },
               "size": {
                 "px": 46
@@ -46,7 +46,7 @@
               "id": "sidebar-footer",
               "type": "block",
               "content": {
-                "mod": "workspace-chrome",
+                "mod": "chrome-dev",
                 "props": {
                   "footer": true
                 }
@@ -213,7 +213,7 @@
             "mod": "hibernate"
           },
           "size": {
-            "px": 120
+            "px": 0
           }
         }
       ],

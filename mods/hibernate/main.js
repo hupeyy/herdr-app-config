@@ -1,16 +1,13 @@
 // Hibernates idle Claude panes and wakes them in place. The work is claude/hibernate.mjs; this
-// always-shown status chip runs its tick every 5 minutes, wakes a hibernated pane when it is
-// selected, and shows how many panes sleep. A click hibernates idle panes now.
+// invisible block runs its tick every 5 minutes and wakes a hibernated pane when it is selected.
+// The on/off switch (hibernate.mjs on|off) is in the sidebar's Settings menu; while off nothing
+// new sleeps, and sleeping panes still wake when selected.
 
-import { View, div, svg } from "gpui-kit";
-import { h_flex } from "gpui-base";
-import { spaces, panes, terminals, theme, exec, appHome, notify } from "herdr";
+import { View, div } from "gpui-kit";
+import { spaces, panes, terminals, exec, appHome, notify } from "herdr";
 
 const SCRIPT = () => `${appHome()}/claude/hibernate.mjs`;
 const TICK_MS = 5 * 60 * 1000;
-const PER_PANE_GB = 1.2; // a Claude session plus its MCP servers (measured 2026-10-21)
-
-const asleep = () => terminals().filter((x) => x.state === "live" && x.labels?.["claude.hibernated"]);
 
 // The panes on screen: every pane of the active tab. The focused one is the one Alex selected.
 function onScreen() {
@@ -30,7 +27,7 @@ export default class Hibernate extends View {
   }
 
   tick(cx) {
-    if (this.running) return;
+    if (this.running) return; // while switched off, the script returns at once
     this.running = true;
     cx.spawn(async (cx) => {
       try {
@@ -63,21 +60,9 @@ export default class Hibernate extends View {
     });
   }
 
+  // Nothing to show: the switch lives in the sidebar's Settings menu (chrome-dev). The block stays
+  // in the layout at 0 px because its timers run the ticks and the wake on select.
   render() {
-    const t = theme();
-    const n = asleep().length;
-    const last = this.last;
-    const tip = [
-      n ? `${n} Claude pane${n === 1 ? "" : "s"} hibernated (about ${(n * PER_PANE_GB).toFixed(1)} GB freed). Select one to wake it.` : "No Claude pane is hibernated.",
-      last?.error ? `Last run failed: ${last.error}` : last ? `Last run: ${last.hibernated.length} hibernated, ${last.freeGbAfter} GB free.` : "",
-      "Click to hibernate idle panes now.",
-    ].filter(Boolean).join("\n");
-    return h_flex().id("hibernate").size_full().px(10).gap(6).items_center().justify_end()
-      .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(n ? t.muted : t.dim)
-      .cursor_pointer().hover((s) => s.text_color(t.foreground))
-      .tooltip(tip)
-      .on_click((_e, cx) => this.tick(cx))
-      .child(svg("mods/hibernate/moon.svg").size(12))
-      .child(this.running ? "Hibernating…" : this.waking.size ? "Waking…" : `${n} asleep`);
+    return div().size_full();
   }
 }
