@@ -21,9 +21,9 @@ export const TICKET_KEY = /(?<![A-Za-z0-9])([A-Z][A-Z0-9]+-\d+)/i;
 const PR_FIELDS = `
 fragment pr on PullRequest {
   number title url isDraft reviewDecision headRefName updatedAt
-  author { login }
+  author { __typename login }
   repository { name }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
   reviews(last: 50) { nodes { author { login } state submittedAt } }
   timelineItems(last: 30, itemTypes: [REVIEW_REQUESTED_EVENT]) {
     nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } } } }
@@ -31,11 +31,12 @@ fragment pr on PullRequest {
 }`;
 
 const PR_QUERY = `
-query($mine: String!, $review: String!, $reviewed: String!) {
+query($mine: String!, $review: String!, $reviewed: String!, $others: String!) {
   viewer { login }
   mine: search(query: $mine, type: ISSUE, first: 50) { nodes { ...pr } }
   review: search(query: $review, type: ISSUE, first: 50) { nodes { ...pr } }
   reviewed: search(query: $reviewed, type: ISSUE, first: 50) { nodes { ...pr } }
+  others: search(query: $others, type: ISSUE, first: 100) { nodes { ...pr } }
 }
 ${PR_FIELDS}`;
 
@@ -338,9 +339,18 @@ async function fetchPrs() {
     mine: `${scope} author:@me sort:updated-desc`,
     review: `${scope} review-requested:@me sort:updated-desc`,
     reviewed: `${scope} reviewed-by:@me -author:@me sort:updated-desc`,
+    others: `${scope} -author:@me -review-requested:@me sort:updated-desc`,
   });
   const me = data.viewer?.login ?? null;
-  const review = data.review.nodes.map((n) => toPr(n, me));
+  // Bots (Dependabot) never request a review, and drafts are often not requested from me yet, so
+  // both stay in the list while open, showing my review. A push after my review asks me again.
+  const extra = data.others.nodes.filter((n) => n.author?.__typename === "Bot" || n.isDraft).map((n) => {
+    const pr = toPr(n, me);
+    const pushed = n.commits?.nodes?.[0]?.commit?.committedDate;
+    if (!pr.myReview || !pushed || pushed <= pr.myReview.at) return pr;
+    return { ...pr, rerequested: true, requestedAt: pushed, review: "REREQUESTED", askedAgain: [{ who: me, was: pr.myReview.state, at: pushed }] };
+  });
+  const review = [...data.review.nodes.map((n) => toPr(n, me)), ...extra];
   const asked = new Set(review.map((p) => p.url));
   return {
     me,

@@ -20,7 +20,7 @@ const boardOpen = () => Date.now() - (shared(BOARD)?.at ?? 0) < BOARD_LEASE_MS;
 import { POLL_MS, STALE_MS, snapshot, refresh, forBranch, withMoves, moveTicket, prAction } from "./data.js";
 import { ticketDrawer, prPage } from "./detail.js";
 import { toolbar, jiraBody } from "./jira.js";
-import { ink, onFill, contrast } from "./colors.js";
+import { ink, onFill } from "./colors.js";
 import { brand } from "./brand.js";
 import { PR_ACTIONS, prActions, ownMenu, openPrMenu } from "./pr-menu.js";
 import { PRESETS, setPrPrefs, prData, filteredPrs, prGroupsOf, prToolbar } from "./prs.js";
@@ -32,8 +32,6 @@ const TAB_BRAND = { jira: "jira", prs: "github" };
 // Set at the start of each render, which runs to the end before another copy renders.
 let paper = null;
 
-// GitHub's link blue: the dark-mode shade, or the light-mode one where that falls under 3:1.
-const blue = (bg) => (contrast("#58A6FF", bg) >= 3 ? "#58A6FF" : "#0969DA");
 
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 const CI = { SUCCESS: ["✓", "passing", "done"], FAILURE: ["✗", "failing", "blocked"], ERROR: ["✗", "error", "blocked"], PENDING: ["●", "running", "working"], EXPECTED: ["●", "waiting", "working"] };
@@ -132,6 +130,7 @@ const myReviewBadge = (t, pr, long) => {
   // A glyph alone says nothing to a screen reader: the image role keeps the label in the tree.
   const mark = (tone) => div().flex_none().role("image").accessibility_label(pr.rerequested ? `Re-requested. ${tip}` : tip)
     .text_color(ink(t, tone, paper)).tooltip(tip);
+  if (long === "glyph") return mark(tone).child(glyph); // the rail: the review badge beside it shows a re-request
   return pr.rerequested
     ? mark("working").child(long ? `↻ re-requested (${word})` : "↻ re-requested")
     : mark(tone).child(`${glyph} ${word}`);
@@ -202,7 +201,7 @@ export default class Tasks extends View {
       .on_click((_e, cx) => this.fold(id, cx))
       .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(11).flex_none().text_color(t.dim))
       .when(Boolean(mark), (el) => el.child(brand(t, mark, 11, t.chrome)))
-      .child(div().truncate().text_color(tone ? ink({ ...t, blue: blue(paper) }, tone, paper) : t.dim).child(label))
+      .child(div().truncate().text_color(tone ? ink({ ...t, blue: t.accent }, tone, paper) : t.dim).child(label))
       .child(div().text_color(t.dim).child(String(count)));
   }
 
@@ -529,6 +528,7 @@ export default class Tasks extends View {
       div().flex_none().text_color(pr.branch === branch ? ink(t, "accent", paper) : t.dim).child(`#${pr.number}`),
       div().flex_1().min_w(0).truncate().text_color(pr.draft ? t.muted : t.foreground).tooltip(`${pr.repo} #${pr.number}  ${pr.title}`).child(pr.title),
       ...(withAuthor ? [div().flex_none().max_w(90).truncate().text_color(t.muted).child(pr.author)] : []),
+      ...(withAuthor ? [myReviewBadge(t, pr, "glyph")] : []),
       reviewBadge(t, pr),
     ]);
     // One header per list, with a repo label above each repo's rows once they span more than one.
