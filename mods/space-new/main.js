@@ -12,7 +12,14 @@ import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui
 import { spaces, focused, run, theme, home, appHome, props, closeOverlay, shared, setShared, pickFolder, knownAgents, readTextFile, exec } from "herdr";
 
 // The same tile colors the Spaces list used, stored by name.
+// Fallbacks only: a mark takes the theme's own ansi color, so it follows the palette.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+// Text on a color fill: dark on light fills (orange, amber), white on deep ones.
+const inkOn = (hex) => {
+  const n = parseInt(String(hex).slice(1, 7), 16);
+  return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 > 150 ? "#1b1b1b" : "#ffffff";
+};
+
 const ICONS = ["folder", "terminal", "server", "layers", "git-branch", "monitor", "files", "clock", "archive", "square-pen", "settings", "search", "jira", "github"];
 // "jira" and "github" are the brand marks (Simple Icons, CC0); the rest come from workspace-chrome.
 const BRAND = { jira: "mods/file-icons/brand/jira.svg", github: "mods/file-icons/brand/github.svg" };
@@ -281,7 +288,7 @@ export default class WorkspaceDialog extends View {
 
   render(_cx) {
     const t = theme();
-    const fill = MARK[this.color] ?? t[this.color];
+    const fill = t[this.color] ?? MARK[this.color];
     const typed = this.name.value().trim();
     const fallback = this.mode === "edit" ? (this.space && !this.space.named ? this.space.name : "") : basename(this.folder.value().trim());
     const label = typed || fallback || "Workspace";
@@ -291,8 +298,8 @@ export default class WorkspaceDialog extends View {
     // A dev workspace (new or edited) picks a Poké Ball and a Pokémon; a workspace (root) a color.
     const picks = this.mode === "edit" || this.mode === "newDev";
     const tile = (size, icon) => h_flex().size(size).flex_none().rounded(Math.round(size / 3.6)).bg(fill).items_center().justify_center()
-      .text_size(size * 0.55).font_bold().text_color("#ffffff")
-      .child(icon ? svg(ICON(icon)).size(size * 0.6).text_color("#ffffff") : ([...label][0]?.toUpperCase() ?? "?"));
+      .text_size(size * 0.55).font_bold().text_color(inkOn(fill))
+      .child(icon ? svg(ICON(icon)).size(size * 0.6).text_color(inkOn(fill)) : ([...label][0]?.toUpperCase() ?? "?"));
     const button = (id, text, onClick, primary) => h_flex().id(id).h(32).px(14).items_center().rounded(8).text_size(12.5)
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.surface)
       .text_color(primary ? t.solid_foreground : t.foreground).cursor_pointer().hover((s) => s.opacity(0.88))
@@ -316,7 +323,7 @@ export default class WorkspaceDialog extends View {
             this.chip(t, `recent-${i}`, basename(f), this.folder.value().trim() === f, () => { this.folder.set_value(f); this.error = ""; }).tooltip(f))))))))
         .when(picks, (el) => el.child(this.section(t, "Poké Ball", this.ballSection(t))))
         .when(!picks, (el) => el.child(this.section(t, "Color", h_flex().gap(8).children(Object.entries(MARK).map(([key, hex]) =>
-          div().id(`color-${key}`).size(26).rounded(13).bg(hex).cursor_pointer()
+          div().id(`color-${key}`).size(26).rounded(13).bg(t[key] ?? hex).cursor_pointer()
             .border_2().border_color(this.color === key ? t.foreground : t.popover)
             .on_click((_e, cx) => { this.color = key; cx.notify(); })))))
         .child(this.section(t, "Icon", h_flex().gap(6).flex_wrap()

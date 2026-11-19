@@ -29,6 +29,15 @@ function setCollapsed(ids, on) {
 const norm = (p) => String(p ?? "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
 const ROOT_FOLDER = () => norm(`${home()}/Desktop/dev`);
 
+// tasks.snapshot is ~200 KB: read it at most every 30 s, not once per card per render.
+let ticketCache = null;
+function ticketSummaries() {
+  if (ticketCache && Date.now() - ticketCache.read < 30000) return ticketCache.map;
+  const map = new Map((shared("tasks.snapshot")?.tickets ?? []).map((x) => [x.key, { key: x.key, summary: x.summary }]));
+  ticketCache = { read: Date.now(), map };
+  return map;
+}
+
 // The sidebar card's title (space-panel card()): a name given by hand as it is; else the first
 // ticket key in the space name, a tab name, an agent title or the branch, as "KEY summary"; else
 // the space name. A bare ticket key as the name gets its summary too.
@@ -37,7 +46,7 @@ function cardTitle(space, children) {
   if (space.named && !bareKey) return space.name;
   const texts = [space.name, ...space.tabs.map((x) => x.name), ...children.map((c) => c.title), space.branch];
   const key = texts.map((x) => x?.match(TICKET_KEY)?.[1]?.toUpperCase()).find(Boolean);
-  const ticket = key ? shared("tasks.snapshot")?.tickets?.find((x) => x.key === key) : null;
+  const ticket = key ? ticketSummaries().get(key) : null;
   return ticket ? `${ticket.key} ${ticket.summary}` : space.name;
 }
 

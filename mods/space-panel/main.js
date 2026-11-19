@@ -151,6 +151,8 @@ const GITHUB = "mods/file-icons/brand/github.svg";
 const JIRA_BLUE = "#2684FF";
 // Locked dev workspaces, set from the card menu (menu-spaces): no close, no moving tabs out.
 const LOCKED = "space.locked";
+// The theme color at a given alpha ("1f" ~ 12%), for tinted backdrops.
+const tint = (hex, alpha) => `${String(hex).slice(0, 7)}${alpha}`;
 const isLocked = (id) => Boolean((shared(LOCKED) ?? {})[id]);
 // Where a tab can move from the menu: the other dev workspaces of its root workspace.
 function moveTargets(spaceId) {
@@ -173,6 +175,20 @@ const AGENT_TABS = "agent.tabs";
 const AGENT_VIEW = "agent.view";
 // Tickets and PRs the dev workspace's Claude sessions work on (see pollWork).
 const WORK = "space.work";
+// tasks.snapshot is ~200 KB (every board ticket). Reading it on each render pushed the render past
+// the script time limit ("This view could not be re-rendered ... interrupted"), so read it at most
+// every TASKS_TTL_MS and keep only what the cards look up.
+const TASKS_TTL_MS = 30000;
+let tasksCache = null;
+function tasksIndex() {
+  if (tasksCache && Date.now() - tasksCache.read < TASKS_TTL_MS) return tasksCache;
+  const snap = shared("tasks.snapshot");
+  const tickets = new Map((snap?.tickets ?? []).map((x) => [x.key, { key: x.key, url: x.url, summary: x.summary }]));
+  const anyUrl = [...tickets.values()].find((x) => x.url)?.url;
+  tasksCache = { read: Date.now(), tickets, jiraBase: anyUrl?.replace(/\/browse\/.*$/, "") ?? null,
+    prs: [...(snap?.mine ?? []), ...(snap?.review ?? [])] };
+  return tasksCache;
+}
 const WORK_POLL_MS = 20000;
 const uniqueBy = (list, keyOf) => list.filter((x, i) => x && list.findIndex((y) => y && keyOf(y) === keyOf(x)) === i);
 
@@ -188,7 +204,14 @@ function setLocked(id, on) {
 }
 // A name from workspace-chrome, "jira" / "github" (a dev workspace's icon choice), or a full path.
 const ICON = (name) => (name === "jira" ? JIRA : name === "github" ? GITHUB : name.includes("/") ? name : `mods/workspace-chrome/${name}.svg`);
+// Fallbacks only: a mark takes the theme's own ansi color, so it follows the palette.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+// Text on a color fill: dark on light fills (orange, amber), white on deep ones.
+const inkOn = (hex) => {
+  const n = parseInt(String(hex).slice(1, 7), 16);
+  return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 > 150 ? "#1b1b1b" : "#ffffff";
+};
+
 const TICKET_KEY = /(?<![A-Za-z0-9])([A-Z][A-Z0-9]+-\d+)/i;
 // The Tasks board's single-board lease and request (see mods/tasks/main.js).
 const BOARD_LEASE_MS = 40000;
@@ -203,7 +226,7 @@ function ago(ms) {
 }
 
 const basename = (path) => (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
-const fillOf = (t, color) => (color?.startsWith("#") ? color : (MARK[color] ?? t[color] ?? MARK.ansi6));
+const fillOf = (t, color) => (color?.startsWith("#") ? color : (t[color] ?? MARK[color] ?? t.ansi6));
 
 // Opens the Tasks board on a ticket, a PR, or one of its tabs, reusing an open board.
 function openTask(target) {
@@ -586,14 +609,14 @@ export default class DevWorkspaces extends View {
     // Its ticket: the space's name, a tab's name, an agent's title, or the branch.
     const texts = [space.name, ...space.tabs.map((x) => x.name), ...spaceAgents.map((a) => a.title), space.branch];
     const key = texts.map((x) => x?.match(TICKET_KEY)?.[1]?.toUpperCase()).find(Boolean) ?? null;
-    const ticket = key ? ctx.snap?.tickets?.find((x) => x.key === key) : null;
+    const ticket = key ? ctx.tasks.tickets.get(key) : null;
     // Every ticket and PR it works on: the name's key and branch, plus what its sessions created,
     // were handed or reviewed (pollWork). The buttons open all of them.
     const work = Object.values(shared(WORK)?.sessions ?? {}).filter((w) => w.space === space.id);
     const keys = uniqueBy([key, ...work.flatMap((w) => w.tickets)], (k) => k);
-    const jiraBase = ctx.snap?.tickets?.find((x) => x.url)?.url?.replace(/\/browse\/.*$/, "") ?? null;
+    const { jiraBase } = ctx.tasks;
     const tickets = keys.map((k) => ({ kind: "ticket", key: k,
-      url: ctx.snap?.tickets?.find((x) => x.key === k)?.url ?? (jiraBase ? `${jiraBase}/browse/${k}` : "") }));
+      url: ctx.tasks.tickets.get(k)?.url ?? (jiraBase ? `${jiraBase}/browse/${k}` : "") }));
     const prs = uniqueBy([
       ctx.prs.find((p) => space.branch && p.branch === space.branch),
       ...ctx.prs.filter((p) => keys.includes(p.ticket)),
@@ -632,7 +655,7 @@ export default class DevWorkspaces extends View {
       : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
       : drawn ? ball(STILL_CELL)
       : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
-        .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color("#ffffff")));
+        .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color(inkOn(fill))));
     // Collapsed, the card shows its most urgent top-level agent (newest first among equals), never a
     // sub-agent: those rows are "agent-" (Agent tool) and "sub-" (child terminals). The mark still
     // rolls the sub-agents in, so a working child keeps the card in progress.
@@ -663,7 +686,7 @@ export default class DevWorkspaces extends View {
       // A press on the card (not on a tab row) starts a card drag, which reorders the dev workspaces.
       .on_mouse_down("left", (e) => { if (!isLocked(space.id)) { this.cardDrag = space.id; this.dropTarget = null; this.arm(e); } })
       .on_hover((on, cx) => {
-        if (!this.moved || !this.cardDrag) return;
+        if (!this.moved || !this.cardDrag || isLocked(space.id)) return;
         if (on) this.dropTarget = space.id; else if (this.dropTarget === space.id) this.dropTarget = null;
         cx.notify();
       })
@@ -1037,15 +1060,26 @@ export default class DevWorkspaces extends View {
     const rootOf = shared("space.root") ?? {};
     const root = (shared("roots") ?? []).find((r) => r.id === (activeSpace ? rootOf[activeSpace.id] : null));
     const mine = spaces().filter((s) => root && rootOf[s.id] === root.id);
-    const snap = shared("tasks.snapshot");
+    const tasks = tasksIndex();
     const all = terminals();
     const ctx = {
-      allPanes: withClaude(panes(), all), all, byAddress: new Map(all.map((x) => [x.address, x])), allAgents: agents(), snap, light: isLight(t.background),
-      prs: [...(snap?.mine ?? []), ...(snap?.review ?? [])],
+      allPanes: withClaude(panes(), all), all, byAddress: new Map(all.map((x) => [x.address, x])), allAgents: agents(), tasks, light: isLight(t.background),
+      prs: tasks.prs,
       compact: (this.width ?? Infinity) < COMPACT_PX,
     };
     this.settle(ctx.allPanes);
     setAgentOrder(ctx.allAgents.filter((a) => mine.some((s) => s.id === a.space)).map((a) => a.address));
+
+    const locked = mine.filter((s) => isLocked(s.id));
+    const open = mine.filter((s) => !isLocked(s.id));
+    const cardsOf = (s) => {
+      // During a card drag, a line shows where the card will land: above the target when it
+      // moves up, below when it moves down.
+      const cue = this.cardDrag && this.dropTarget === s.id && this.cardDrag !== s.id
+        ? (spaces().findIndex((x) => x.id === this.cardDrag) > spaces().findIndex((x) => x.id === s.id) ? "above" : "below") : null;
+      const line = div().mx(12).mt(6).mb(-4).h(3).rounded(2).bg(t.accent);
+      return [...(cue === "above" ? [line] : []), this.card(t, s, ctx), ...(cue === "below" ? [line] : [])];
+    };
 
     const header = h_flex().px(16).pt(14).pb(6).gap(8).flex_none().items_center()
       .child(v_flex().flex_1().min_w(0)
@@ -1076,15 +1110,19 @@ export default class DevWorkspaces extends View {
         .child(this.iconButton(t, "new-dev", "plus", "New dev workspace", () => openOverlay({
           mod: "space-panel", kind: "popup", width: 230, height: 140, props: { newMenu: { root: root.id } },
         })))))
-      .child(v_flex().id("dev-workspace-list").flex_1().min_h(0).pb(10).overflow_y_scrollbar()
-        .children(mine.flatMap((s) => {
-          // During a card drag, a line shows where the card will land: above the target when it
-          // moves up, below when it moves down.
-          const cue = this.cardDrag && this.dropTarget === s.id && this.cardDrag !== s.id
-            ? (spaces().findIndex((x) => x.id === this.cardDrag) > spaces().findIndex((x) => x.id === s.id) ? "above" : "below") : null;
-          const line = div().mx(12).mt(6).mb(-4).h(3).rounded(2).bg(t.accent);
-          return [...(cue === "above" ? [line] : []), this.card(t, s, ctx), ...(cue === "below" ? [line] : [])];
-        }))
+      .child(v_flex().id("dev-workspace-list").flex_1().min_h(0).pb(10).overflow_y_scroll()
+        .when(locked.length > 0, (el) => el.child(this.lockedZone(t, locked.flatMap(cardsOf), ctx.compact)))
+        .children(open.flatMap(cardsOf))
         .when(!mine.length, (el) => el.child(div().px(16).pt(6).text_size(12).text_color(t.dim).child("No dev workspaces yet. Add one with +."))));
+  }
+
+  // Locked dev workspaces sit on an accent-tinted backdrop (orange in ember) above the rest.
+  lockedZone(t, cards, compact) {
+    return v_flex().id("locked-zone").mx(compact ? 2 : 4).mt(8).pb(8).flex_none().rounded(12)
+      .bg(tint(t.accent, "1f")).border_1().border_color(tint(t.accent, "66"))
+      .when(!compact, (el) => el.child(h_flex().px(12).pt(7).gap(5).items_center().text_size(11).text_color(t.accent)
+        .child(svg("mods/file-icons/ui/lock.svg").size(10).flex_none())
+        .child("Locked")))
+      .children(cards);
   }
 }

@@ -11,7 +11,14 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, home, watchFolder, readTextFile, writeTextFile } from "herdr";
 
+// Fallbacks only: a mark takes the theme's own ansi color, so it follows the palette.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+// Text on a color fill: dark on light fills (orange, amber), white on deep ones.
+const inkOn = (hex) => {
+  const n = parseInt(String(hex).slice(1, 7), 16);
+  return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 > 150 ? "#1b1b1b" : "#ffffff";
+};
+
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 const PENDING_MS = 30000;
 // The "jira" and "github" icon choices are brand marks (Simple Icons, CC0), not workspace-chrome icons.
@@ -140,7 +147,7 @@ export default class RootTabs extends View {
   }
 
   tab(root, t, rootOf, active) {
-    const fill = root.color?.startsWith("#") ? root.color : (MARK[root.color] ?? t[root.color] ?? MARK.ansi6);
+    const fill = root.color?.startsWith("#") ? root.color : (t[root.color] ?? MARK[root.color] ?? t.ansi6);
     const mine = spaces().filter((s) => rootOf[s.id] === root.id);
     const status = mine.reduce((m, s) => ((RANK[s.status] ?? 0) > (RANK[m] ?? 0) ? s.status : m), null);
     const on = root.id === active;
@@ -160,8 +167,8 @@ export default class RootTabs extends View {
         openOverlay({ mod: "space-new", kind: "dialog", width: 560, height: 470, props: { editRoot: root.id } });
       })
       .child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center()
-        .text_size(10.5).font_bold().text_color("#ffffff")
-        .child(root.icon ? svg(BRAND[root.icon] ?? `mods/workspace-chrome/${root.icon}.svg`).size(11).text_color("#ffffff") : ([...root.name][0]?.toUpperCase() ?? "?")))
+        .text_size(10.5).font_bold().text_color(inkOn(fill))
+        .child(root.icon ? svg(BRAND[root.icon] ?? `mods/workspace-chrome/${root.icon}.svg`).size(11).text_color(inkOn(fill)) : ([...root.name][0]?.toUpperCase() ?? "?")))
       .child(div().min_w(0).truncate().child(root.name))
       .when(mine.length > 1, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(mine.length))))
       .when(status === "blocked" || status === "done", (el) => el.child(div().flex_none().text_color(t[status]).child("●")))
