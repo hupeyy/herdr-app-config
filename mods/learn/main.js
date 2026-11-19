@@ -8,6 +8,7 @@ import { characterCard, radar, xpDelta } from "./rpg.js";
 const SCRIPT = () => `${home()}/.claude/learning/learn.mjs`;
 const INBOX = () => `${home()}/.claude/learning/inbox`;
 const VERDICT = { right: ["Right", "done"], partial: ["Partly right", "blocked"], wrong: ["Wrong", "ansi1"] };
+const TAG_MAX = 28; // concept names can be a whole sentence
 const md = (id, text) => TextView.markdown(id, text || "").selectable(true);
 
 function age(iso) {
@@ -104,7 +105,10 @@ export default class Learn extends View {
   }
 
   tag(t, text, color) {
-    return div().px(6).py(1).rounded(4).text_size(10.5).bg(t.raised).text_color(color ?? t.muted).child(text);
+    const s = String(text ?? "");
+    const short = s.length > TAG_MAX ? `${s.slice(0, TAG_MAX - 1).trimEnd()}…` : s;
+    return div().px(6).py(1).rounded(4).text_size(10.5).bg(t.raised).text_color(color ?? t.muted)
+      .min_w(0).max_w_full().overflow_hidden().truncate().child(short);
   }
 
   section(t, title, body) {
