@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { call as browserCall, ensureDaemon, CHROME_PORT } from "./browser.mjs";
+import { nameOf } from "../mods/space-panel/pokemon-names.js";
 
 const HOME = join(homedir(), ".config", "herdr-app");
 const BRIDGE = join(HOME, "data", "hx");
@@ -104,7 +105,28 @@ function parseArgs(argv) {
 
 // ---- herdr state ----
 
-const run = (cmd, args, input) => execFileSync(cmd, args, { encoding: "utf8", input, maxBuffer: 64 * 2 ** 20, windowsHide: true });
+const run = (cmd, args, input, env) => execFileSync(cmd, args, { encoding: "utf8", input, env, maxBuffer: 64 * 2 ** 20, windowsHide: true });
+
+// ---- agent names: "<Pokemon> - <chat title>", the Pokemon on the pane's dev workspace card
+// (space-panel picks it, shared "space.pokemon"), so agents name each other in words Alex sees ----
+
+// The reply command: the Pokemon when its dev workspace has one agent, "Pokemon - tab" when its
+// tab has one, else the address.
+function reachOf(st, address) {
+  const { space, tab } = where(st, address);
+  const agents = (tabs) => tabs.flatMap((t) => t.terminals).filter(isAgent).length;
+  const quote = (n) => (/[\s']/.test(n) ? `"${n}"` : n);
+  if (space?.pokemon && agents(space.tabs) === 1) return `hx send ${quote(space.pokemon)}`;
+  if (space?.pokemon && agents([tab]) === 1) return `hx send ${quote(`${space.pokemon} - ${tab.name}`)}`;
+  return `hx send ${address}`;
+}
+
+// "Vanillite - herdr config": what the sidebar shows, the workspace card's Pokemon and the tab name.: the Claude chat title, else the tab name.
+function displayName(st, address) {
+  const pokemon = st.names[address] ?? address;
+  const title = where(st, address).tab?.name;
+  return title ? `${pokemon} - ${title.replace(/["<>\s]+/g, " ").trim()}` : pokemon;
+}
 
 // Resumes a pane that claude/hibernate.mjs put to sleep and waits for its prompt. True if it woke.
 function wakeIfHibernated(address) {
@@ -126,11 +148,12 @@ function state() {
   const hc = JSON.parse(run("hc", ["ls", "--json"])).terminals ?? [];
   const byAddress = new Map(hc.map((t) => [t.address, t]));
   const s = shared();
+  const pokemon = s["space.pokemon"] ?? {};
   const roots = Array.isArray(s.roots) && s.roots.length ? s.roots : [{ id: "r-dev", name: "dev", folder: join(homedir(), "Desktop", "dev") }];
   const rootOf = s["space.root"] ?? {};
   const locked = s["space.locked"] ?? {};
   const spaces = app.spaces.map((sp, i) => ({
-    id: sp.id, name: sp.name, folder: sp.folder, active: sp.active, index: i + 1,
+    id: sp.id, name: sp.name, pokemon: pokemon[sp.id] ? nameOf(pokemon[sp.id]) : null, folder: sp.folder, active: sp.active, index: i + 1,
     root: roots.find((r) => r.id === rootOf[sp.id]) ?? roots[0], locked: Boolean(locked[sp.id]),
     tabs: sp.tabs.map((tab, j) => ({
       id: tab.id, name: tab.name, active: tab.active, index: j + 1,
@@ -147,7 +170,9 @@ function state() {
       t.terminals.push({ address: h.address, pane: null, agent: h.agent ?? null, status: h.status ?? null, turn: h.turn ?? null, cwd: h.cwd ?? null, parent: h.parent });
     }
   }
-  return { roots, spaces, hc: byAddress };
+  const names = {};
+  for (const sp of spaces) for (const t of sp.tabs) for (const x of t.terminals) if (sp.pokemon) x.name = names[x.address] = sp.pokemon;
+  return { roots, spaces, hc: byAddress, names };
 }
 
 const isAgent = (x) => Boolean(x.agent && !SHELLS.test(x.agent)) || Boolean(x.status);
@@ -186,6 +211,15 @@ const splitTarget = (q) => { const i = q.lastIndexOf("/"); return i > 0 ? [q.sli
 // A terminal address, or the agent of a space or space/tab (its first agent terminal, else its
 // first terminal: a shell-only tab is still a target).
 function findAgent(st, q) {
+  // "Pikachu" (its dev workspace) or "Pikachu - <tab name>".
+  const [poke, ...rest] = String(q).split(" - ");
+  const home = st.spaces.find((sp) => sp.pokemon?.toLowerCase() === poke.trim().toLowerCase());
+  if (home) {
+    const title = rest.join(" - ").trim().toLowerCase();
+    const terms = home.tabs.flatMap((t) => t.terminals).filter(isAgent);
+    const hit = title && terms.find((x) => where(st, x.address).tab?.name.toLowerCase() === title);
+    q = hit ? hit.address : home.id;
+  }
   if (st.hc.has(q)) return { address: q, ...where(st, q), agent: isAgent({ agent: st.hc.get(q).agent, status: st.hc.get(q).status }) };
   const [sq, tq] = splitTarget(q);
   const space = findSpace(st, sq);
@@ -300,7 +334,7 @@ function lsText(st) {
       lines.push(`  ${sp.active ? "*" : " "} ${sp.name}${sp.locked ? " [locked]" : ""}  (${sp.id})`);
       for (const tab of sp.tabs) {
         lines.push(`      ${tab.active ? ">" : " "} ${tab.name}  (${tab.id})`);
-        for (const x of tab.terminals) lines.push(`          ${x.address}  ${x.agent ?? "?"}  ${x.status ?? "-"}${x.parent ? `  sub-agent of ${x.parent}` : ""}`);
+        for (const x of tab.terminals) lines.push(`          ${x.address}  ${x.name ?? "-"}  ${x.agent ?? "?"}  ${x.status ?? "-"}${x.parent ? `  sub-agent of ${x.parent}` : ""}`);
       }
     }
   }
@@ -322,8 +356,8 @@ async function main(argv) {
   if (cmd === "whoami") {
     const m = me(st);
     if (!m?.space) throw new Error("not inside a herdr terminal (HC_TERMINAL_ID is not set, or its pane is gone)");
-    const data = { terminal: m.address, tab: { id: m.tab.id, name: m.tab.name }, space: { id: m.space.id, name: m.space.name }, workspace: { id: m.space.root.id, name: m.space.root.name } };
-    return print(opt, data, `${m.address} in ${m.space.root.name} / ${m.space.name} / ${m.tab.name}`);
+    const data = { terminal: m.address, name: displayName(st, m.address), tab: { id: m.tab.id, name: m.tab.name }, space: { id: m.space.id, name: m.space.name }, workspace: { id: m.space.root.id, name: m.space.root.name } };
+    return print(opt, data, `${data.name} (${m.address}) in ${m.space.root.name} / ${m.space.name} / ${m.tab.name}`);
   }
 
   if (cmd === "ws") {
@@ -411,7 +445,7 @@ async function main(argv) {
   if (["send", "ask", "read", "wait"].includes(cmd)) {
     const target = findAgent(st, need(sub, "a target"));
     if (cmd !== "read" && target.address === process.env.HC_TERMINAL_ID) throw new Refused("that is you");
-    const label = target.space ? `${target.space.name}/${target.tab.name} (${target.address})` : target.address;
+    const label = `${st.names[target.address] ?? target.address}${target.space ? ` in ${target.space.name}/${target.tab.name}` : ""} (${target.address})`;
     if (cmd === "read") return process.stdout.write(run("hc", ["read", target.address, "--lines", String(opt.lines ?? 0)]));
     if (cmd === "wait") {
       const out = run("hc", ["wait", target.address, "--json", ...(opt.timeout ? ["--timeout", String(opt.timeout)] : [])]);
@@ -421,7 +455,15 @@ async function main(argv) {
     const woke = (cmd === "send" || cmd === "ask") && wakeIfHibernated(target.address);
     if (cmd === "ask" && !target.agent && !woke) throw new Refused(`${label} is not an agent (a shell never ends a turn): use hx send, then hx read`);
     const text = need(rest.join(" "), "the text to send");
-    run("hc", ["send", ...(opt.force ? ["--force"] : []), target.address, text]);
+    // From an agent, hc would tag the text <hc from="tN">. Tag it with our name instead and send
+    // without HC_TERMINAL_ID, so hc types it as is.
+    const sender = me(st);
+    const fromAgent = sender && st.hc.get(sender.address) && isAgent(st.hc.get(sender.address));
+    const body = fromAgent
+      ? `<hc from="${displayName(st, sender.address)}" reach='${reachOf(st, sender.address)}'>${text}</hc>`
+      : text;
+    const { HC_TERMINAL_ID, ...env } = process.env;
+    run("hc", ["send", ...(opt.force ? ["--force"] : []), target.address, body], undefined, env);
     if (cmd === "send") return print(opt, { sent: target.address }, `sent to ${label}`);
     // ask: wait for the turn, then the reply from the Claude transcript, else the screen.
     const waited = JSON.parse(run("hc", ["wait", target.address, "--json", ...(opt.timeout ? ["--timeout", String(opt.timeout)] : [])]) || "{}");
