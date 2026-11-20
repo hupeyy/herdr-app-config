@@ -94,6 +94,7 @@ export default class Reader extends View {
     this.width = 0;
     this.scroll = ScrollHandle.new();
     this.follow = true;
+    this.full = new Set(); // messages already drawn in full (see render)
     this.input = TextareaState.new({ placeholder: "Message Claude", rows: 2 });
     this.input.set_auto_grow(1, 8);
     this.input.on("submit", (_e, cx) => this.sendInput(cx));
@@ -202,7 +203,7 @@ export default class Reader extends View {
       const r = await exec("node", [`${appHome()}/mods/reader/parse.mjs`, session, ...(first ? ["--full"] : [])], { timeout: 60000 });
       const data = JSON.parse(r.stdout || "{}");
       if (data.missing || data.error) return;
-      if (first) { this.session = session; this.shown = SHOWN; this.open.clear(); }
+      if (first) { this.session = session; this.shown = SHOWN; this.open.clear(); this.full = new Set(); }
       this.items = data.replaced ? data.items : this.items.concat(data.items).slice(-1200);
       const said = new Set(data.items.filter((x) => x.k === "user").map((x) => x.text.trim()));
       this.pending = this.pending.filter((m) => !said.has(m.text.trim()) && Date.now() - Date.parse(m.t) < 120000);
@@ -635,24 +636,32 @@ export default class Reader extends View {
         .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.sendInput(cx)).child("Send"));
 
     // Build from the newest message back and stop drawing in full once the frame has spent its
-    // budget (by words and by time): older messages draw as one line each.
+    // budget (by words and by time): older messages draw as one line each. A message drawn in
+    // full stays in full, so heights do not change between redraws and the view does not jump.
     const slice = visible.slice(from);
     const started = Date.now();
     let budget = WORD_BUDGET;
     const built = [];
     for (let j = slice.length - 1; j >= 0; j--) {
-      const compact = budget <= 0 || Date.now() - started > RENDER_MS;
-      if (!compact) budget -= ["user", "peer", "asst", "recap"].includes(slice[j].k) ? Math.min(wordsIn(slice[j]), 400) : 4;
+      const key = `${slice[j].k}|${slice[j].t}|${slice[j].id ?? ""}|${String(slice[j].text ?? "").length}`;
+      const compact = !this.full.has(key) && (budget <= 0 || Date.now() - started > RENDER_MS);
+      if (!compact) {
+        this.full.add(key);
+        budget -= ["user", "peer", "asst", "recap"].includes(slice[j].k) ? Math.min(wordsIn(slice[j]), 400) : 4;
+      }
       built.push(this.item(t, slice[j], from + j, results, answers, compact));
     }
     const rows = built.reverse().filter(Boolean).concat(pendingRows);
-    // scroll_to_item takes a real child index and is consumed after layout, so ask for the last one here.
-    if (this.toBottom && rows.length) { this.toBottom = false; this.scroll.scroll_to_item(rows.length - 1 + (from > 0 ? 1 : 0)); }
+    // Follow scrolls to an empty marker after the last message: revealing a message taller than
+    // the view only shows its top, which left the view a few scrolls short of the bottom.
+    // scroll_to_item takes a real child index and is consumed after layout.
+    if (this.toBottom) { this.toBottom = false; this.scroll.scroll_to_item(rows.length + (from > 0 ? 1 : 0)); }
     const stream = v_flex().id("stream").flex_1().min_h(0).overflow_y_scroll().track_scroll(this.scroll).pb(8)
       .when(from > 0, (el) => el.child(div().id("earlier").px(14).py(6).text_size(11.5).text_color(t.accent).cursor_pointer()
         .on_click((_e, cx) => { this.shown += SHOWN; this.follow = false; cx.notify(); })
         .child(`Show earlier (${from.toLocaleString()} more)`)))
       .children(rows)
+      .child(div().id("stream-end").h(1).flex_none())
       .when(!this.items.length, (el) => el.child(div().p(14).text_size(12).text_color(t.dim)
         .child(this.sessionOf() ? "Reading the chat…" : "No Claude session in this pane yet.")));
 
