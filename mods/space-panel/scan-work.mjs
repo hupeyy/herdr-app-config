@@ -3,7 +3,8 @@
 //   node scan-work.mjs <sessionId>...
 //   -> { "<sessionId>": { tickets: [key], prs: [{ url, repo, number }], worktrees: [path] } }
 // Tickets: keys a jira_create made ("created KEY  ->"), keys in the person's own prompts, the
-// key a jira_* command acts on. PRs: Claude Code's own pr-link records (created, viewed or reviewed).
+// key a jira_* command acts on. PRs: Claude Code's own pr-link records (created, viewed or reviewed),
+// and "herdr-pr <url>" lines a tool result prints.
 // Worktrees: <dev>\worktrees\<repo>\<name> folders its tool calls name at least 3 times (a passing
 // mention, such as a memory note, names one once or twice); the Resource Manager sizes them.
 // Transcripts grow to MBs, so each file is read from where the last run stopped (cache below).
@@ -20,7 +21,7 @@ const PROJECT_KEYS = new Set(["RIPPLE"]); // filters look-alikes such as UTF-8 o
 const WORKTREES = join(homedir(), "Desktop", "dev", "worktrees");
 const WORKTREE = /dev[\\/]+worktrees[\\/]+([A-Za-z0-9_.-]+)[\\/]+([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)/g;
 const WORKTREE_MIN = 3;
-const CACHE_VERSION = 2; // 2 added worktrees: older entries are read again from the start
+const CACHE_VERSION = 3; // 2 added worktrees, 3 added herdr-pr lines: older entries are read again
 
 let cache = {};
 try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
@@ -61,6 +62,11 @@ function scanLines(lines, found) {
       if (Array.isArray(content)) for (const c of content) {
         if (c.type !== "tool_result") continue;
         for (const m of textOf([c]).matchAll(/created ([A-Z][A-Z0-9]+-\d+)\s+->/g)) add(found.tickets, m[1]);
+        // A PR whose worktree sits outside the session's folders gets no pr-link record, so a run
+        // names it on purpose with a "herdr-pr <url>" line.
+        for (const m of textOf([c]).matchAll(/^herdr-pr (https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/(\d+))\s*$/gm)) {
+          if (!found.prs.some((p) => p.url === m[1])) found.prs.push({ url: m[1], repo: m[2], number: Number(m[3]) });
+        }
       }
     } else if (e.type === "assistant" && Array.isArray(e.message?.content)) {
       for (const c of e.message.content) {
