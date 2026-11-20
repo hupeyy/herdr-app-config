@@ -468,7 +468,45 @@ export default class Reader extends View {
     const btn = (id, label, primary, onClick) => div().id(id).px(10).py(3).rounded(6).text_size(12).cursor_pointer()
       .bg(primary ? t.accent : t.raised).text_color(primary ? t.accent_foreground : t.foreground).border_1().border_color(primary ? t.accent : t.input)
       .hover((s) => s.opacity(0.85)).on_click(onClick).child(label);
-    // A prompt drawn in the terminal (permission, multiple choice): show its screen and press its keys.
+    // Claude's multiple-choice pop-up shows one question at a time in the terminal, so every
+    // question is drawn here from the transcript with its own options. Send presses the pop-up's
+    // keys: per question Down to the option and Enter (which moves on), then Enter on "Submit
+    // answers" when there was more than one. Multi-select questions use the screen mirror below.
+    const ask = this.waiting.ask;
+    if (ask && ask.questions.length && !ask.questions.some((q) => q.multi)) {
+      if (this.askId !== ask.id) { this.askId = ask.id; this.askPicks = {}; }
+      const picks = this.askPicks;
+      const ready = ask.questions.every((_q, j) => picks[j] !== undefined);
+      const submit = (_e, cx) => {
+        if (!ready) return;
+        const keys = [];
+        ask.questions.forEach((_q, j) => { for (let d = 0; d < picks[j]; d++) keys.push("down"); keys.push("enter"); });
+        if (ask.questions.length > 1) keys.push("enter");
+        exec("hc", ["keys", this.terminal, ...keys]);
+        this.sentAt = Date.now();
+        cx.notify();
+      };
+      return frame(ask.questions.length > 1 ? `Claude asks ${ask.questions.length} questions` : "Claude asks", [
+        ...ask.questions.map((q, j) => v_flex().id(`aq-${j}`).gap(4)
+          .child(h_flex().gap(8).items_center()
+            .when(Boolean(q.header), (el) => el.child(div().flex_none().px(6).rounded(4).bg(t.raised).text_size(11).text_color(t.muted).child(q.header)))
+            .child(div().flex_1().min_w(0).text_size(12.5).font_weight(600).text_color(t.foreground).child(q.question)))
+          .children(q.options.map((o, k) => h_flex().id(`aq-${j}-${k}`).gap(8).items_start().px(8).py(4).rounded(6).cursor_pointer()
+            .border_1().border_color(picks[j] === k ? t.accent : t.input).bg(picks[j] === k ? t.selected : t.background)
+            .hover((st) => st.border_color(t.accent))
+            .on_click((_e, cx) => { this.askPicks = { ...this.askPicks, [j]: k }; cx.notify(); })
+            .child(div().flex_none().text_color(t.accent).font_weight(700).child(String(k + 1)))
+            .child(v_flex().flex_1().min_w(0)
+              .child(div().text_size(12.5).text_color(t.foreground).child(o.label))
+              .when(Boolean(o.description), (el) => el.child(div().text_size(11.5).text_color(t.dim).child(o.description))))))),
+        h_flex().gap(8).items_center()
+          .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim)
+            .child(ready ? "Ready to send" : `${ask.questions.filter((_q, j) => picks[j] !== undefined).length} of ${ask.questions.length} answered`))
+          .child(btn("ask-term", "Other answer in terminal", false, () => this.showTerminal(true)))
+          .child(btn("ask-send", "Send answers", ready, submit)),
+      ]);
+    }
+    // A prompt drawn in the terminal (permission, multi-select): show its screen and press its keys.
     if (status === "blocked" || this.waiting.ask) {
       const key = (id, label, k, primary) => btn(`k-${id}`, label, primary, () => this.keys(k));
       return frame(this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
