@@ -36,7 +36,11 @@ if ($Action -eq "start") {
     # Background jobs and other child sessions inherit HC_TERMINAL_ID from the
     # pane that launched them. Only the interactive session owns the pane.
     $sessionFile = Join-Path $env:USERPROFILE ".claude\sessions\$($env:CLAUDE_PID).json"
-    if (-not $env:CLAUDE_PID -or -not (Test-Path $sessionFile)) { exit 0 }
+    if (-not $env:CLAUDE_PID) { exit 0 }
+    # Claude can run this hook before it writes its session file; giving up then left the pane
+    # labelled with an older session (2026-11-20, managers / manager 1).
+    for ($i = 0; $i -lt 30 -and -not (Test-Path $sessionFile); $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path $sessionFile)) { exit 0 }
     try { $session = Get-Content $sessionFile -Raw | ConvertFrom-Json } catch { exit 0 }
     if ($session.kind -ne "interactive") { exit 0 }
     $mode = if ($payload.permission_mode) { $payload.permission_mode } else { "auto" }

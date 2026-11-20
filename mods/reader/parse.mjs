@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const PROJECTS = join(homedir(), ".claude", "projects");
 const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "reader");
-const VERSION = 2; // bump when items change shape: older state is parsed again from the start
+const VERSION = 3; // bump when items change shape: older state is parsed again from the start
 const KEEP = 400; // items kept for a Reader that opens late
 const CHUNK = 8 * 2 ** 20; // read at most this much per run, so a huge first read stays under exec's limits
 const HEAD = 6; // tool result lines shown before folding
@@ -84,7 +84,19 @@ function lastQuestionOf(text) {
   const asking = numbered.filter((x) => x.options.length >= 2 || x.q.includes("?"));
   const last = clean(lines.filter((l) => l.trim()).pop() ?? "");
   const endsAsking = /\?\s*$/.test(last);
-  if (!endsAsking && !asking.length) return null;
+  // "One answer is still open:" then "1. option" "2. option" at the end: one question, numbered options.
+  if (!endsAsking && !asking.length) {
+    const kept = lines.map((l) => l.trimEnd()).filter((l) => l.trim());
+    let i = kept.length;
+    while (i > 0 && /^\s{0,1}\**\d+[.)]\**\s+/.test(kept[i - 1])) i--;
+    const opts = kept.slice(i).map((l) => l.match(/^\s{0,1}\**(\d+)[.)]\**\s+(.+)$/)).filter(Boolean);
+    const intro = clean(kept[i - 1] ?? "");
+    if (opts.length >= 2 && /:\s*$/.test(intro)) {
+      const q = short(intro.replace(/:\s*$/, ""), 200);
+      return { text: q, single: true, numbered: [{ n: 1, q, options: opts.map((m) => ({ n: Number(m[1]), label: short(clean(m[2]), 140) })) }] };
+    }
+    return null;
+  }
   const sentence = last.replace(/^([-*]|\d+[.)])\s+/, "").split(/(?<=[.!])\s+/).filter((s) => s.includes("?")).pop() ?? last;
   return { text: short(endsAsking ? sentence : asking[0].q, 240), numbered: asking.length >= 2 || asking.some((x) => x.options.length) ? asking : [] };
 }
@@ -157,8 +169,19 @@ function take(line) {
     }
     if (c.type === "image") { push({ k: "user", t, text: "[image]" }); continue; }
     if (c.type !== "text" || !c.text) continue;
-    const text = c.text.replace(REMINDER, "").trim();
+    let text = c.text.replace(REMINDER, "").trim();
     if (!text) continue;
+    // Text Alex pasted (often another agent's message): unwrap it; his own words after it stay his.
+    const paste = text.match(/^<pasted_content[^>]*>\s*([\s\S]*?)\s*<\/pasted_content[^>]*>\s*([\s\S]*)$/);
+    if (paste) {
+      const inner = paste[1].match(/^<hc from="([^"]*)"(?:\s+reach=(?:'([^']*)'|"([^"]*)"))?>([\s\S]*?)<\/hc>$/);
+      if (inner) {
+        push({ k: "peer", t, from: inner[1], reach: inner[2] ?? inner[3] ?? null, text: inner[4].trim(), pasted: true });
+        touch(inner[4]);
+        if (!paste[2].trim()) continue;
+        text = paste[2].trim();
+      } else text = [paste[1], paste[2]].filter((x) => x.trim()).join("\n\n");
+    }
     const note = text.match(/<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>[\s\S]*?(?:<status>([^<]*)<\/status>)?[\s\S]*?(?:<summary>([^<]*)<\/summary>)?/);
     if (note) {
       delete state.agg.running[note[1]];

@@ -11,11 +11,16 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, TextareaState, Textarea } from "gpui-base";
-import { exec, appHome, theme, props, panes, terminals, focused, shared, setShared, run, watchFolder, checking } from "herdr";
+import { exec, appHome, home, readTextFile, theme, props, panes, terminals, focused, shared, setShared, run, watchFolder, checking } from "herdr";
 
 const OPENED = "reader.opened"; // { terminal: ms } so a Reader you closed stays closed
 const SHOWN = 40; // items drawn before "Show earlier"; each word is an element, so keep this small
 const LONG = 2400; // reply characters drawn before "Show more"
+// Words drawn in full color per frame. Every word is an element and herdr stops a render that
+// runs too long ("interrupted"), so older messages past this budget draw as one line each.
+const WORD_BUDGET = 2500;
+const RENDER_MS = 30; // time for full-color messages per frame; herdr interrupts slow renders
+const wordsIn = (it) => String(it.text ?? "").split(/\s+/).length;
 const POLL_MS = 15000; // fallback when the folder watch misses a write
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 
@@ -41,14 +46,26 @@ const TOKEN = new RegExp([
   "\\b(\\d+(?:\\.\\d+)?\\s?(?:GB|MB|KB|ms|min|s)\\b|\\d{1,2}:\\d{2}(?::\\d{2})?\\b)", // 10 number
 ].join("|"), "g");
 
+// Tokenizing is the costly part of a redraw (the regex runs in herdr's QuickJS), and the same
+// texts are drawn again on every change, so results are kept by text.
+const TOKEN_CACHE = new Map();
+const KINDS = ["", "code", "bold", "link", "url", "ticket", "pr", "path", "good", "bad", "num"];
 function tokens(text) {
+  const hit = TOKEN_CACHE.get(text);
+  if (hit) return hit;
+  const out = tokenize(text);
+  if (TOKEN_CACHE.size > 3000) TOKEN_CACHE.clear();
+  TOKEN_CACHE.set(text, out);
+  return out;
+}
+
+function tokenize(text) {
   const out = [];
   let last = 0;
   for (const m of text.matchAll(TOKEN)) {
     if (m.index > last) out.push({ kind: "text", text: text.slice(last, m.index) });
-    const kinds = ["", "code", "bold", "link", "url", "ticket", "pr", "path", "good", "bad", "num"];
     const i = m.findIndex((g, j) => j > 0 && g !== undefined);
-    out.push({ kind: kinds[i], text: m[0] });
+    out.push({ kind: KINDS[i], text: m[0] });
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push({ kind: "text", text: text.slice(last) });
@@ -145,6 +162,24 @@ export default class Reader extends View {
 
   // ---- data ----
 
+  // The session Claude is in now: its own session file (~/.claude/sessions/<pid>.json) for the
+  // pane's foreground process. The claude.session label can lag behind: it is set by a
+  // SessionStart hook that may miss, and a new `claude` in the same pane starts a new session.
+  async liveSession() {
+    try {
+      const r = await exec("hc", ["get", this.terminal, "--json"]);
+      const pid = JSON.parse(r.stdout || "{}").foreground?.pid;
+      if (pid) {
+        const text = await readTextFile(`${home()}/.claude/sessions/${pid}.json`);
+        const id = text ? JSON.parse(text).sessionId : null;
+        if (id) return id;
+      }
+    } catch {
+      // fall back to the label
+    }
+    return this.sessionOf();
+  }
+
   sessionOf() {
     return terminals().find((x) => x.address === this.terminal)?.labels?.["claude.session"] ?? null;
   }
@@ -159,7 +194,7 @@ export default class Reader extends View {
     if (!this.isShown()) { this.stale = true; return; }
     this.stale = false;
     if (this.loading) { this.dirty = true; return; }
-    const session = this.sessionOf();
+    const session = await this.liveSession();
     if (!session) return;
     const first = session !== this.session;
     this.loading = true;
@@ -269,10 +304,14 @@ export default class Reader extends View {
     return hit?.url?.startsWith("https://") ? hit.url : null;
   }
 
+  // tasks.snapshot is ~200 KB: reading it per ticket key stalled the render ("interrupted"),
+  // so the Jira base is looked up once a minute.
   ticketUrl(key) {
-    const snap = shared("tasks.snapshot");
-    const base = snap?.tickets?.find((x) => x.url)?.url?.replace(/\/browse\/.*$/, "");
-    return base?.startsWith("https://") ? `${base}/browse/${key}` : null;
+    if (!this.jira || Date.now() - this.jira.at > 60000) {
+      const snap = shared("tasks.snapshot");
+      this.jira = { at: Date.now(), base: snap?.tickets?.find((x) => x.url)?.url?.replace(/\/browse\/.*$/, "") ?? null };
+    }
+    return this.jira.base?.startsWith("https://") ? `${this.jira.base}/browse/${key}` : null;
   }
 
   // Markdown blocks: fences, tables, headings, lists, quotes, paragraphs.
@@ -323,7 +362,8 @@ export default class Reader extends View {
     return v_flex().id(id).gap(6).min_w(0).children(blocks);
   }
 
-  table(t, rows, id) {
+  table(t, allRows, id) {
+    const rows = allRows.slice(0, 25); // a header and 24 rows; longer tables are cut
     if (!rows.length) return div();
     const cols = Math.max(...rows.map((r) => r.length));
     return v_flex().id(id).rounded(6).border_1().border_color(t.border).overflow_hidden().min_w(0)
@@ -336,8 +376,17 @@ export default class Reader extends View {
 
   // ---- items ----
 
-  item(t, it, i, results, answers) {
+  item(t, it, i, results, answers, compact) {
     const id = `it-${i}`;
+    // Over the word budget: one cheap line that opens the message on click.
+    if (compact && ["user", "peer", "asst", "recap"].includes(it.k) && !this.open.has(id)) {
+      const who = it.k === "user" ? "You" : it.k === "peer" ? it.from : it.k === "recap" ? "While you were away" : "Claude";
+      return h_flex().id(id).gap(8).px(14).py(5).text_size(12).cursor_pointer().hover((s) => s.bg(t.hover))
+        .border_b(1).border_color(t.border).on_click((_e, cx) => { this.open.add(id); cx.notify(); })
+        .child(div().flex_none().font_weight(700).text_color(it.k === "peer" ? t.accent : it.k === "user" ? t.foreground : t.muted).child(who))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(String(it.text).replace(/\s+/g, " ").slice(0, 300)))
+        .child(div().flex_none().text_color(t.dim).child(clock(it.t)));
+    }
     if (it.k === "user") {
       return v_flex().id(id).gap(3).px(14).py(9).bg(t.surface).border_b(1).border_color(t.border)
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.foreground).font_weight(700).child("You")).child(clock(it.t)))
@@ -345,8 +394,10 @@ export default class Reader extends View {
     }
     if (it.k === "peer") {
       return v_flex().id(id).gap(3).px(14).py(9).border_l(3).border_color(t.accent).bg(t.surface).border_b(1)
-        .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.accent).font_weight(700).child(it.from)).child("message from another agent").child(clock(it.t)))
-        .child(this.inline(t, it.text, `${id}-x`));
+        .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.accent).font_weight(700).child(it.from)).child(it.pasted ? "pasted by you" : "message from another agent").child(clock(it.t)))
+        .child(this.inline(t, it.text.length > 1500 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1500)}…` : it.text, `${id}-x`))
+        .when(it.text.length > 1500 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
+          .on_click((_e, cx) => { this.open.add(`${id}-all`); cx.notify(); }).child("Show all")));
     }
     if (it.k === "asst") {
       const long = it.text.length > LONG && !this.open.has(id);
@@ -433,6 +484,18 @@ export default class Reader extends View {
     }
     const q = this.waiting.question;
     if (!q) return null;
+    // One question with numbered options ("One answer is still open: 1. ... 2. ..."): tap to send.
+    if (q.single && q.numbered?.[0]?.options.length) {
+      const x = q.numbered[0];
+      return frame("Claude is waiting on you", [
+        this.inline(t, x.q, "dq-text"),
+        ...x.options.map((o) => h_flex().id(`so-${o.n}`).gap(8).items_center().px(8).py(5).rounded(6).cursor_pointer()
+          .border_1().border_color(t.input).bg(t.background).hover((s) => s.border_color(t.accent))
+          .on_click((_e, cx) => this.send(String(o.n), cx))
+          .child(div().flex_none().text_color(t.accent).font_weight(700).child(String(o.n)))
+          .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(o.label))),
+      ]);
+    }
     if (q.numbered?.length) {
       const draft = q.numbered.map((x) => `${x.n}. ${this.picks[x.n] ?? "…"}`).join(" ");
       const ready = q.numbered.every((x) => this.picks[x.n]);
@@ -533,7 +596,18 @@ export default class Reader extends View {
       .child(div().id("send").flex_none().px(12).py(5).rounded(7).text_size(12.5).font_weight(600).cursor_pointer()
         .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.sendInput(cx)).child("Send"));
 
-    const rows = visible.slice(from).map((it, i) => this.item(t, it, from + i, results, answers)).filter(Boolean).concat(pendingRows);
+    // Build from the newest message back and stop drawing in full once the frame has spent its
+    // budget (by words and by time): older messages draw as one line each.
+    const slice = visible.slice(from);
+    const started = Date.now();
+    let budget = WORD_BUDGET;
+    const built = [];
+    for (let j = slice.length - 1; j >= 0; j--) {
+      const compact = budget <= 0 || Date.now() - started > RENDER_MS;
+      if (!compact) budget -= ["user", "peer", "asst", "recap"].includes(slice[j].k) ? Math.min(wordsIn(slice[j]), 400) : 4;
+      built.push(this.item(t, slice[j], from + j, results, answers, compact));
+    }
+    const rows = built.reverse().filter(Boolean).concat(pendingRows);
     // scroll_to_item takes a real child index and is consumed after layout, so ask for the last one here.
     if (this.toBottom && rows.length) { this.toBottom = false; this.scroll.scroll_to_item(rows.length - 1 + (from > 0 ? 1 : 0)); }
     const stream = v_flex().id("stream").flex_1().min_h(0).overflow_y_scroll().track_scroll(this.scroll).pb(8)
