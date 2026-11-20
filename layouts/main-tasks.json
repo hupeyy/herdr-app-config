@@ -215,6 +215,19 @@
           "size": {
             "px": 0
           }
+        },
+        {
+          "id": "reader-auto",
+          "type": "block",
+          "content": {
+            "mod": "reader",
+            "props": {
+              "auto": true
+            }
+          },
+          "size": {
+            "px": 0
+          }
         }
       ],
       "size": {
