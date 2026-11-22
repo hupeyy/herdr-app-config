@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const PROJECTS = join(homedir(), ".claude", "projects");
 const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "reader");
-const VERSION = 3; // bump when items change shape: older state is parsed again from the start
+const VERSION = 4; // bump when items change shape: older state is parsed again from the start
 const KEEP = 400; // items kept for a Reader that opens late
 const CHUNK = 8 * 2 ** 20; // read at most this much per run, so a huge first read stays under exec's limits
 const HEAD = 6; // tool result lines shown before folding
@@ -102,7 +102,7 @@ function lastQuestionOf(text) {
 }
 
 function toolSummary(name, input = {}) {
-  if (name === "Bash" || name === "PowerShell") return { label: input.description || short(input.command, 120), detail: short(input.command, 400) };
+  if (name === "Bash" || name === "PowerShell") return { label: input.description || short(input.command, 120), detail: String(input.command ?? "").slice(0, 20000) }; // whole command: the Reader copies it and shows all of it
   if (["Edit", "Write", "Read", "NotebookEdit"].includes(name)) return { label: input.file_path ?? "", file: input.file_path };
   if (name === "Grep" || name === "Glob") return { label: short(input.pattern, 120) };
   if (name === "Agent") return { label: `${input.subagent_type ?? "agent"}: ${short(input.description ?? input.prompt, 100)}` };

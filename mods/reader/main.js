@@ -10,8 +10,9 @@
 //                  tab once per terminal (shared "reader.opened"), then gives focus back.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, ScrollHandle, TextareaState, Textarea } from "gpui-base";
-import { exec, appHome, home, readTextFile, theme, props, panes, terminals, focused, shared, setShared, run, watchFolder, checking } from "herdr";
+import { v_flex, h_flex, ScrollHandle, TextareaState, Textarea, TextView } from "gpui-base";
+import { exec, appHome, home, readTextFile, theme, props, panes, terminals, focused, spaces, shared, setShared, run, watchFolder, checking } from "herdr";
+import { NAMES } from "./pokemon-names.js"; // a copy: mods cannot import each other
 
 const OPENED = "reader.opened"; // { terminal: ms } so a Reader you closed stays closed
 const SHOWN = 40; // items drawn before "Show earlier"; each word is an element, so keep this small
@@ -77,7 +78,7 @@ export default class Reader extends View {
     const p = props() ?? {};
     this.auto = Boolean(p.auto);
     if (this.auto) {
-      if (!checking()) cx.timer.every(3000, () => this.autoOpen());
+      if (!checking()) cx.timer.every(3000, () => { this.autoOpen(); this.nameTabs(); });
       return;
     }
     this.terminal = p.terminal ?? null;
@@ -89,6 +90,7 @@ export default class Reader extends View {
     this.path = null;
     this.shown = SHOWN;
     this.open = new Set(); // expanded tool rows, long replies and summaries
+    this.selecting = new Set(); // messages shown as selectable text (see actions)
     this.picks = {}; // numbered question -> "yes" | "no"
     this.sentAt = 0;
     this.width = 0;
@@ -159,6 +161,32 @@ export default class Reader extends View {
     if (opened[claude.terminal]) return;
     setShared(OPENED, { ...opened, [claude.terminal]: Date.now() });
     run("pane.split", { pane: claude.pane, direction: "right", mod: "reader", props: { terminal: claude.terminal } });
+  }
+
+  // Claude tabs are named "<Pokemon> - <name>" ("Vanillite - herdr config"): the herdr phone app
+  // runs no mods but shows tab names, so this is how the agent's name reaches the phone. The
+  // Pokemon is the dev workspace card's (space-panel, shared "space.pokemon"); a rename or a new
+  // Pokemon is followed. hx strips the prefix again (tabBase) so names never double.
+  nameTabs() {
+    if (Date.now() - (this.namedAt ?? 0) < 10000) return;
+    this.namedAt = Date.now();
+    const pokemon = shared("space.pokemon") ?? {};
+    const all = panes();
+    const sessions = new Set(terminals().filter((x) => x.labels?.["claude.session"]).map((x) => x.address));
+    const known = new Set(NAMES);
+    const strip = (name) => {
+      const i = name.indexOf(" - ");
+      return i > 0 && known.has(name.slice(0, i)) ? name.slice(i + 3) : name;
+    };
+    for (const space of spaces()) {
+      const poke = NAMES[(pokemon[space.id] ?? 0) - 1];
+      if (!poke) continue;
+      for (const tab of space.tabs) {
+        if (!all.some((p) => p.tab === tab.id && isClaude(p, sessions))) continue;
+        const want = `${poke} - ${strip(tab.name)}`;
+        if (tab.name !== want) run("tab.rename", { id: tab.id, name: want });
+      }
+    }
   }
 
   // ---- data ----
@@ -375,6 +403,56 @@ export default class Reader extends View {
           .child(this.inline(t, r[j] ?? "", `${id}-r${i}-${j}`, i === 0 ? { color: t.muted, bold: true } : {}))))));
   }
 
+  // ---- copy and select ----
+
+  // A small "Copy" that says "Copied" until the next redraw after a moment.
+  copyBtn(t, key, text, label = "Copy") {
+    const done = this.copied?.key === key && Date.now() - this.copied.at < 2000;
+    return div().id(`copy-${key}`).flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
+      .text_color(done ? t.done : t.dim).hover((st) => st.bg(t.hover).text_color(t.foreground))
+      .tooltip("Copy to the clipboard")
+      .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(text); this.copied = { key, at: Date.now() }; cx.notify(); })
+      .child(done ? "Copied" : label);
+  }
+
+  // Under a message: Copy (the raw text) and Select text, which swaps the colored words for a
+  // selectable text view of the same message (each colored word is its own element, so the
+  // colored view cannot be selected across words).
+  actions(t, id, text) {
+    const selecting = this.selecting.has(id);
+    return h_flex().id(`${id}-act`).justify_end().gap(4)
+      .child(this.copyBtn(t, id, text))
+      .child(div().id(`${id}-sel-btn`).flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
+        .text_color(selecting ? t.accent : t.dim).hover((st) => st.bg(t.hover).text_color(t.foreground))
+        .on_click((_e, cx) => { selecting ? this.selecting.delete(id) : this.selecting.add(id); cx.notify(); })
+        .child(selecting ? "Done selecting" : "Select text"));
+  }
+
+  selectable(id, text) { return TextView.markdown(`${id}-sel`, text).selectable(true); }
+
+  // An open tool row: the whole command (8 lines, then "Show all"), then the first output lines.
+  // Both are selectable text, so a command can be copied by hand too.
+  toolBody(t, it, r, id) {
+    const CMD_LINES = 8;
+    const cmd = String(it.detail ?? "");
+    const lines = cmd.split("\n");
+    const all = this.open.has(`${id}-cmdall`);
+    const shown = all ? cmd : lines.slice(0, CMD_LINES).join("\n");
+    const fence = (text) => "```\n" + text.replace(/```/g, "` ` `") + "\n```";
+    return v_flex().px(10).py(6).gap(4).bg(t.chrome).rounded_b(6).text_size(11)
+      .when(Boolean(cmd), (el) => el
+        .child(h_flex().justify_between().items_center()
+          .child(div().text_size(10.5).text_color(t.dim).child(lines.length > 1 ? `Command · ${lines.length} lines` : "Command"))
+          .child(this.copyBtn(t, `${id}-cmd2`, cmd, "Copy command")))
+        .child(div().text_color(t.ansi3).child(TextView.markdown(`${id}-cmdtext`, fence(shown)).selectable(true)))
+        .when(lines.length > CMD_LINES, (x) => x.child(div().id(`${id}-cmdmore`).text_size(11.5).text_color(t.accent).cursor_pointer()
+          .on_click((_e, cx) => { all ? this.open.delete(`${id}-cmdall`) : this.open.add(`${id}-cmdall`); cx.notify(); })
+          .child(all ? "Show less" : `Show all ${lines.length} lines`))))
+      .child(div().text_color(r.err ? t.blocked : t.muted)
+        .child(TextView.markdown(`${id}-out`, fence(r.head.join("\n") || " ")).selectable(true)))
+      .when(r.more > 0, (x) => x.child(div().text_color(t.dim).child(`+${r.more} more lines`)));
+  }
+
   // ---- items ----
 
   item(t, it, i, results, answers, compact) {
@@ -391,22 +469,26 @@ export default class Reader extends View {
     if (it.k === "user") {
       return v_flex().id(id).gap(3).px(14).py(9).bg(t.surface).border_b(1).border_color(t.border)
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.foreground).font_weight(700).child("You")).child(clock(it.t)))
-        .child(this.inline(t, it.text.length > 1200 ? `${it.text.slice(0, 1200)}…` : it.text, `${id}-x`));
+        .child(this.selecting.has(id) ? this.selectable(id, it.text) : this.inline(t, it.text.length > 1200 ? `${it.text.slice(0, 1200)}…` : it.text, `${id}-x`))
+        .child(this.actions(t, id, it.text));
     }
     if (it.k === "peer") {
       return v_flex().id(id).gap(3).px(14).py(9).border_l(3).border_color(t.accent).bg(t.surface).border_b(1)
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.accent).font_weight(700).child(it.from)).child(it.pasted ? "pasted by you" : "message from another agent").child(clock(it.t)))
-        .child(this.inline(t, it.text.length > 1500 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1500)}…` : it.text, `${id}-x`))
-        .when(it.text.length > 1500 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
-          .on_click((_e, cx) => { this.open.add(`${id}-all`); cx.notify(); }).child("Show all")));
+        .child(this.selecting.has(id) ? this.selectable(id, it.text) : this.inline(t, it.text.length > 1500 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1500)}…` : it.text, `${id}-x`))
+        .when(!this.selecting.has(id) && it.text.length > 1500 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
+          .on_click((_e, cx) => { this.open.add(`${id}-all`); cx.notify(); }).child("Show all")))
+        .child(this.actions(t, id, it.text));
     }
     if (it.k === "asst") {
       const long = it.text.length > LONG && !this.open.has(id);
       const text = long ? `${it.text.slice(0, LONG)}…` : it.text;
+      const selecting = this.selecting.has(id);
       return v_flex().id(id).gap(4).px(14).py(7)
-        .child(this.rich(t, text, `${id}-r`))
-        .when(long, (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
-          .on_click((_e, cx) => { this.open.add(id); cx.notify(); }).child(`Show more (${(it.text.length - LONG).toLocaleString()} characters)`)));
+        .child(selecting ? this.selectable(id, it.text) : this.rich(t, text, `${id}-r`))
+        .when(long && !selecting, (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
+          .on_click((_e, cx) => { this.open.add(id); cx.notify(); }).child(`Show more (${(it.text.length - LONG).toLocaleString()} characters)`)))
+        .child(this.actions(t, id, it.text));
     }
     if (it.k === "tool") {
       const r = results.get(it.id);
@@ -419,12 +501,9 @@ export default class Reader extends View {
           .child(div().flex_none().text_color(t.ansi6).font_weight(700).child(it.name))
           .child(div().flex_1().min_w(0).truncate().text_color(it.file ? t.ansi6 : t.muted).child(it.file ? base(it.file) : it.label || ""))
           .when(Boolean(r?.image), (el) => el.child(div().flex_none().text_color(t.dim).child("image")))
+          .when(Boolean(it.detail), (el) => el.child(this.copyBtn(t, `${id}-cmd`, it.detail)))
           .child(mark))
-        .when(Boolean(isOpen && r), (el) => el.child(v_flex().px(10).py(6).font_family("Cascadia Mono").text_size(11)
-          .text_color(r.err ? t.blocked : t.muted).bg(t.chrome).rounded_b(6)
-          .when(Boolean(it.detail), (x) => x.child(div().text_color(t.ansi3).child(`$ ${it.detail}`)))
-          .children(r.head.map((l, j) => div().id(`${id}-o${j}`).child(l || " ")))
-          .when(r.more > 0, (x) => x.child(div().text_color(t.dim).child(`+${r.more} more lines`)))));
+        .when(Boolean(isOpen && r), (el) => el.child(this.toolBody(t, it, r, id)));
     }
     if (it.k === "ask") {
       const answer = answers.get(it.id);

@@ -112,19 +112,28 @@ const run = (cmd, args, input, env) => execFileSync(cmd, args, { encoding: "utf8
 
 // The reply command: the Pokemon when its dev workspace has one agent, "Pokemon - tab" when its
 // tab has one, else the address.
+// A tab's own name without the "<Pokemon> - " the Reader's auto block puts in front of it (so
+// the phone app, which shows tab names, shows the agent's name too).
+const tabBase = (space, tab) => {
+  const name = tab?.name ?? "";
+  const prefix = space?.pokemon ? `${space.pokemon} - ` : null;
+  return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
+};
+
 function reachOf(st, address) {
   const { space, tab } = where(st, address);
   const agents = (tabs) => tabs.flatMap((t) => t.terminals).filter(isAgent).length;
   const quote = (n) => (/[\s']/.test(n) ? `"${n}"` : n);
   if (space?.pokemon && agents(space.tabs) === 1) return `hx send ${quote(space.pokemon)}`;
-  if (space?.pokemon && agents([tab]) === 1) return `hx send ${quote(`${space.pokemon} - ${tab.name}`)}`;
+  if (space?.pokemon && agents([tab]) === 1) return `hx send ${quote(`${space.pokemon} - ${tabBase(space, tab)}`)}`;
   return `hx send ${address}`;
 }
 
-// "Vanillite - herdr config": what the sidebar shows, the workspace card's Pokemon and the tab name.: the Claude chat title, else the tab name.
+// "Vanillite - herdr config": the workspace card's Pokemon and the tab name, as the sidebar shows them.
 function displayName(st, address) {
   const pokemon = st.names[address] ?? address;
-  const title = where(st, address).tab?.name;
+  const { space, tab } = where(st, address);
+  const title = tab ? tabBase(space, tab) : null;
   return title ? `${pokemon} - ${title.replace(/["<>\s]+/g, " ").trim()}` : pokemon;
 }
 
@@ -217,7 +226,7 @@ function findAgent(st, q) {
   if (home) {
     const title = rest.join(" - ").trim().toLowerCase();
     const terms = home.tabs.flatMap((t) => t.terminals).filter(isAgent);
-    const hit = title && terms.find((x) => where(st, x.address).tab?.name.toLowerCase() === title);
+    const hit = title && terms.find((x) => tabBase(home, where(st, x.address).tab).toLowerCase() === title);
     q = hit ? hit.address : home.id;
   }
   if (st.hc.has(q)) return { address: q, ...where(st, q), agent: isAgent({ agent: st.hc.get(q).agent, status: st.hc.get(q).status }) };
