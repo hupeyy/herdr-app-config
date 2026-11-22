@@ -5,6 +5,10 @@ This folder is the live `~/.config/herdr-app`: Herdr redraws itself from it whil
 `.gitignore` is an allowlist. Herdr rewrites its shipped layouts and mods, its type files and
 its state on every start, so only my files are tracked.
 
+![The main-tasks layout with a demo project](docs/screenshots/overview.png)
+
+A tour of every mod, with screenshots: [docs/mods.md](docs/mods.md).
+
 ## Install
 
 ```sh
@@ -27,6 +31,8 @@ https://www.myinstants.com/en/instant/windows-8-8-1-notify-system-generic-9559/ 
 | `main-vimnav` | `main` with `ctrl-h/j/k/l` moving between panes, Neovim style (`vim-nav`) |
 
 ## Mods
+
+Screenshots of each one: [docs/mods.md](docs/mods.md).
 
 | Mod | What it does |
 |---|---|
