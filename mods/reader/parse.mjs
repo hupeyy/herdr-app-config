@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const PROJECTS = join(homedir(), ".claude", "projects");
 const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "reader");
-const VERSION = 4; // bump when items change shape: older state is parsed again from the start
+const VERSION = 5; // bump when items change shape: older state is parsed again from the start
 const KEEP = 400; // items kept for a Reader that opens late
 const CHUNK = 8 * 2 ** 20; // read at most this much per run, so a huge first read stays under exec's limits
 const HEAD = 6; // tool result lines shown before folding
@@ -123,6 +123,10 @@ function take(line) {
     else if (e.subtype === "away_summary" && e.content) push({ k: "recap", t, text: String(e.content).replace(/\s*\(disable recaps in \/config\)\s*$/, "") });
     return;
   }
+  // A background task's end reaches the transcript as a queued notification (a queue-operation or
+  // a queued_command attachment), not as a chat message: read it there, once per task.
+  const queued = typeof e.content === "string" ? e.content : typeof e.attachment?.prompt === "string" ? e.attachment.prompt : null;
+  if (queued && queued.includes("<task-notification>")) { taskDone(queued, t); return; }
   if (e.isSidechain) return; // a subagent's own steps live in its own file
   const content = e.message?.content;
   if (e.type === "assistant") {
@@ -162,7 +166,7 @@ function take(line) {
         continue;
       }
       const bg = text.match(/running in background with ID: (\w+)/);
-      if (bg) state.agg.running[bg[1]] = { label: state.bgTools[c.tool_use_id] ?? "background task", at: t };
+      if (bg && !state.done?.[bg[1]]) state.agg.running[bg[1]] = { label: state.bgTools[c.tool_use_id] ?? "background task", at: t };
       touch(text);
       push({ k: "result", t, id: c.tool_use_id, err: Boolean(c.is_error), image, head: lines.slice(0, HEAD).map((l) => l.slice(0, LINE)), more: Math.max(0, lines.length - HEAD) });
       continue;
@@ -182,12 +186,7 @@ function take(line) {
         text = paste[2].trim();
       } else text = [paste[1], paste[2]].filter((x) => x.trim()).join("\n\n");
     }
-    const note = text.match(/<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>[\s\S]*?(?:<status>([^<]*)<\/status>)?[\s\S]*?(?:<summary>([^<]*)<\/summary>)?/);
-    if (note) {
-      delete state.agg.running[note[1]];
-      push({ k: "sys", kind: "task", t, ok: !/fail|error|killed/i.test(note[2] ?? ""), text: short(note[3] ?? `Background task ${note[2] ?? "finished"}`, 200) });
-      continue;
-    }
+    if (text.includes("<task-notification>")) { taskDone(text, t); continue; }
     const cmd = text.match(/<command-name>\/?([^<]+)<\/command-name>/);
     if (cmd) { push({ k: "sys", kind: "cmd", t, text: `/${cmd[1].replace(/^\//, "")}` }); continue; }
     if (/^<local-command|^<bash-(stdout|stderr|input)>/.test(text)) continue;
@@ -200,6 +199,21 @@ function take(line) {
     if (state.lastQuestion) decide(t, state.lastQuestion.text, short(text, 160));
     state.lastQuestion = null;
   }
+}
+
+// One background task ended: drop it from Running and say so once (its notification can show up
+// as a queue entry, an attachment and a message for the same task).
+function taskDone(text, t) {
+  const note = text.match(/<task-notification>[\s\S]*?<task-id>([^<]+)<\/task-id>/);
+  if (!note) return;
+  const id = note[1];
+  state.done ??= {};
+  if (state.done[id]) return;
+  state.done[id] = true;
+  const status = text.match(/<status>([^<]*)<\/status>/)?.[1] ?? "";
+  const summary = text.match(/<summary>([^<]*)<\/summary>/)?.[1];
+  delete state.agg.running[id];
+  push({ k: "sys", kind: "task", t, ok: !/fail|error|killed/i.test(status), text: short(summary ?? `Background task ${status || "finished"}`, 200) });
 }
 
 function decide(t, q, a) {

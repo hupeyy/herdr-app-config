@@ -9,7 +9,7 @@
 //   { auto: true } an invisible layout block: opens a Reader beside each Claude pane of the shown
 //                  tab once per terminal (shared "reader.opened"), then gives focus back.
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, TextareaState, Textarea, TextView } from "gpui-base";
 import { exec, appHome, home, readTextFile, theme, props, panes, terminals, focused, spaces, shared, setShared, run, watchFolder, checking } from "herdr";
 import { NAMES } from "./pokemon-names.js"; // a copy: mods cannot import each other
@@ -148,6 +148,7 @@ export default class Reader extends View {
     this.input = TextareaState.new({ placeholder: "Message Claude", rows: 2 });
     this.input.set_auto_grow(1, 8);
     this.input.on("submit", (_e, cx) => this.sendInput(cx));
+    this.input.on("paste_other", (_e, cx) => this.pasteImage(cx));
     this.pending = []; // messages sent but not in the transcript yet
     this.screen = null; // the terminal's last lines while a prompt waits there
     this.zoomedOnce = false;
@@ -203,6 +204,19 @@ export default class Reader extends View {
 
   keys(key) { exec("hc", ["keys", this.terminal, key]); }
 
+  // A paste with no text (a screenshot, copied files): save the clipboard image as a PNG and put
+  // its path in the message, as herdr's terminal paste does; Claude reads the file.
+  async pasteImage(cx) {
+    const out = `${appHome()}/data/reader/pasted/pasted-${Date.now()}.png`.replace(/\//g, "\\");
+    const r = await exec("powershell", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", `${appHome()}/mods/reader/paste-image.ps1`, out]).catch(() => null);
+    const said = (r?.stdout ?? "").trim();
+    const paths = said.startsWith("image ") ? [said.slice(6)] : said.startsWith("files ") ? said.slice(6).split("|") : [];
+    if (!paths.length) return;
+    this.input.replace(`${paths.join(" ")} `);
+    this.input.focus();
+    cx.notify();
+  }
+
   // ---- auto: one Reader per Claude pane in the shown tab ----
 
   autoOpen() {
@@ -231,7 +245,10 @@ export default class Reader extends View {
     const all = panes();
     const sessions = new Set(terminals().filter((x) => x.labels?.["claude.session"]).map((x) => x.address));
     const known = new Set(NAMES);
-    const strip = (name) => {
+    // The tab's own name: without "<Pokemon> - ", and a tab named just its Pokemon stands for
+    // its space's name.
+    const strip = (name, space) => {
+      if (known.has(name)) return space.name;
       const i = name.indexOf(" - ");
       return i > 0 && known.has(name.slice(0, i)) ? name.slice(i + 3) : name;
     };
@@ -240,7 +257,10 @@ export default class Reader extends View {
       if (!poke) continue;
       for (const tab of space.tabs) {
         if (!all.some((p) => p.tab === tab.id && isClaude(p, sessions))) continue;
-        const want = `${poke} - ${strip(tab.name)}`;
+        // The phone shows "<space>  <tab>": a tab named like its space would read twice there
+        // ("herdr config  Vanillite - herdr config"), so such a tab is named by its Pokemon alone.
+        const base = strip(tab.name, space);
+        const want = base.trim().toLowerCase() === space.name.trim().toLowerCase() ? poke : `${poke} - ${base}`;
         if (tab.name !== want) run("tab.rename", { id: tab.id, name: want });
       }
     }
@@ -527,8 +547,12 @@ export default class Reader extends View {
         .child(div().flex_none().text_color(t.dim).child(clock(it.t)));
     }
     if (it.k === "user") {
+      // Images pasted into a message (herdr's terminal paste or the Reader's) show as thumbnails.
+      const pics = [...it.text.matchAll(/[A-Za-z]:[\\/][^\s"'<>|]+?\.(?:png|jpe?g|gif|webp)\b/gi)].map((m) => m[0]).slice(0, 4);
       return v_flex().id(id).gap(3).px(14).py(9).bg(t.surface).border_b(1).border_color(t.border)
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.foreground).font_weight(700).child("You")).child(clock(it.t)))
+        .when(pics.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6)
+          .children(pics.map((p, k) => image(p).id(`${id}-img${k}`).max_w(220).max_h(160).rounded(6).border_1().border_color(t.border)))))
         .child(this.selecting.has(id) ? this.selectable(id, it.text) : this.inline(t, it.text.length > 1200 ? `${it.text.slice(0, 1200)}…` : it.text, `${id}-x`))
         .child(this.actions(t, id, it.text));
     }

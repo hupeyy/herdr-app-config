@@ -116,6 +116,7 @@ const run = (cmd, args, input, env) => execFileSync(cmd, args, { encoding: "utf8
 // the phone app, which shows tab names, shows the agent's name too).
 const tabBase = (space, tab) => {
   const name = tab?.name ?? "";
+  if (space?.pokemon && name === space.pokemon) return space.name; // named like its space (see nameTabs)
   const prefix = space?.pokemon ? `${space.pokemon} - ` : null;
   return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
 };
