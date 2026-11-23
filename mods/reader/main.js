@@ -82,26 +82,39 @@ function readPrompt(lines) {
   let end = lines.length - 1;
   while (end >= 0 && !OPTION.test(lines[end])) end--;
   if (end < 0) return null;
-  // Walk up from the last option. A long option wraps onto deeper-indented lines (a path, "from
-  // this project"); those join the option above them. A shallow line that is no option (the
-  // question) ends the list.
+  // Walk up from the last option. Deeper-indented lines under an option are its wrapped tail or,
+  // in an AskUserQuestion pop-up, its description: shown under it. A ruled line between options
+  // (above "Chat about this") is skipped. Any other shallow line (the question) ends the list.
+  const isSep = (l) => /^[\u2500-\u257f\-=.\u00b7]{4,}$/.test(l);
   const options = [];
   let wrap = [];
   let start = end;
   for (let i = end; i >= 0; i--) {
     const m = lines[i].match(OPTION);
     if (m && /^\s{0,3}\S/.test(lines[i])) {
-      options.unshift({ n: Number(m[2]), label: [m[3], ...wrap].join(" "), current: Boolean(m[1]) });
+      options.unshift({ n: Number(m[2]), label: m[3], more: wrap.join(" "), current: Boolean(m[1]) });
       wrap = [];
       start = i;
     } else if (/^\s{4,}\S/.test(lines[i])) wrap.unshift(lines[i].trim());
+    else if (options.length && isSep(lines[i].trim()) && OPTION.test(lines[i - 1] ?? "")) continue;
     else break;
   }
   if (options.length < 2) return null;
+  const footer = lines.slice(end + 1).join(" ");
+  // AskUserQuestion's pop-up: a "\u2610 Header" chip line, then the question on "\u2502"-barred lines.
+  // Claude writes the question to the transcript only once answered, so the screen is the source.
+  if (/enter to select/i.test(footer)) {
+    const above = lines.slice(Math.max(0, start - 30), start);
+    const bar = above.filter((l) => /^\s*\u2502/.test(l)).map((l) => l.replace(/^\s*\u2502\s*/, "").trim());
+    const header = above.filter((l) => /^\s*[\u2610\u2612\u2611\u2714]/.test(l)).pop()?.trim() ?? "";
+    if (bar.length) {
+      return { ask: true, question: bar.join(" "), context: header ? [header] : [], options,
+        cursor: Math.max(0, options.findIndex((o) => o.current)), esc: /esc to cancel/i.test(footer), tab: false };
+    }
+  }
   // Only the lines after the last separator (a dotted or ruled line) belong to the prompt; above
   // it is the command or diff being asked about.
   const raw = lines.slice(Math.max(0, start - 12), start).map((l) => l.replace(/^[\s\u2502|]+/, "").trim());
-  const isSep = (l) => /^[\u2500-\u257f\-=.\u00b7]{4,}$/.test(l);
   const sep = raw.map(isSep).lastIndexOf(true);
   let above = raw.slice(sep + 1).filter(Boolean);
   // Nothing between the separator and the question: show what is being asked about instead
@@ -113,7 +126,6 @@ function readPrompt(lines) {
   const qi = above.map((l) => l.endsWith("?")).lastIndexOf(true);
   const question = qi >= 0 ? above[qi] : above[above.length - 1] ?? "";
   const context = (qi >= 0 ? above.slice(0, qi) : above.slice(0, -1)).slice(-3);
-  const footer = lines.slice(end + 1).join(" ");
   return {
     question, context, options,
     cursor: Math.max(0, options.findIndex((o) => o.current)),
@@ -695,16 +707,20 @@ export default class Reader extends View {
           exec("hc", ["keys", this.terminal, ...keys]);
           this.sentAt = Date.now() - 6500;
           this.screen = null;
+          // "Type something." opens a text field in the pop-up: type it in the terminal.
+          if (/^type something/i.test(prompt.options[i].label)) this.showTerminal(true);
         };
         const showScreen = this.open.has("dock-screen");
-        return frame(this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
+        return frame(prompt.ask || this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
           ...prompt.context.map((l, j) => div().id(`pc-${j}`).text_size(12).text_color(t.muted).child(l)),
           div().text_size(13).font_weight(600).text_color(t.foreground).child(prompt.question),
           ...prompt.options.map((o, i) => h_flex().id(`po-${o.n}`).gap(10).items_start().w_full().px(10).py(7).rounded(7).cursor_pointer()
             .border_1().border_color(o.current ? t.accent : t.input).bg(t.background).hover((st) => st.border_color(t.accent).bg(t.hover))
             .on_click(() => choose(i))
             .child(div().flex_none().text_color(t.accent).font_weight(700).child(String(o.n)))
-            .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(o.label))),
+            .child(v_flex().flex_1().min_w(0)
+              .child(div().text_size(12.5).text_color(t.foreground).child(o.label))
+              .when(Boolean(o.more), (el) => el.child(div().text_size(11.5).text_color(t.dim).child(o.more))))),
           h_flex().flex_wrap().gap(6)
             .when(prompt.esc, (el) => el.child(key("esc", "Cancel (Esc)", "esc")))
             .when(prompt.tab, (el) => el.child(key("tab", "Amend (Tab)", "tab")))
@@ -788,7 +804,7 @@ export default class Reader extends View {
         .child(div().pl(42).truncate().text_color(t.dim).child(d.q))) : [div().text_size(11.5).text_color(t.dim).child("None yet")]))
       .child(head("Running", running.length))
       .child(v_flex().gap(4).children(running.length ? running.map(([k, r]) => h_flex().id(`run-${k}`).gap(6).text_size(11.5).text_color(t.muted)
-        .child(svg(ICON("spinner")).size(10).flex_none().text_color(t.working).spin(900)).child(div().min_w(0).truncate().child(r.label))) : [div().text_size(11.5).text_color(t.dim).child("Nothing")]))
+        .child(svg(ICON("spinner")).size(10).flex_none().text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900))).child(div().min_w(0).truncate().child(r.label))) : [div().text_size(11.5).text_color(t.dim).child("Nothing")]))
       .child(head("Touched in this chat"))
       .child(h_flex().flex_wrap().gap(4)
         .children(prs.map((p, i) => chip(`pr-${i}`, `${p.repo}#${p.number}`, t.accent, p.url)))
@@ -871,7 +887,7 @@ export default class Reader extends View {
     const term = terminals().find((x) => x.address === this.terminal);
     const report = typeof term?.report === "string" ? term.report : term?.report?.msg ?? term?.report?.message ?? null;
     const activity = status === "working" ? h_flex().id("activity").flex_none().gap(8).items_center().px(14).py(6).border_t(1).border_color(t.border).bg(t.chrome)
-      .child(svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900))
+      .child(svg(ICON("spinner")).size(11).flex_none().text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900)))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(report || "Claude is working..."))
       .child(div().id("stop").flex_none().px(8).py(2).rounded(5).text_size(11.5).cursor_pointer().border_1().border_color(t.blocked).text_color(t.blocked)
         .hover((s) => s.bg(t.hover)).tooltip("Stop this turn (Esc in the terminal)").on_click(() => exec("hc", ["interrupt", this.terminal])).child("Stop")) : null;

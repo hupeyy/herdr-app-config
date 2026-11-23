@@ -55,10 +55,10 @@ export default class WorkspaceChrome extends View {
   }
 
   settingsMenu(t) {
-    const on = this.sleepOff === false;
-    const knob = div().w(28).h(16).flex_none().rounded_full().p(2).flex().items_center()
+    const switchKnob = (on) => div().w(28).h(16).flex_none().rounded_full().p(2).flex().items_center()
       .bg(on ? t.accent : t.raised).when(on, (el) => el.justify_end())
       .child(div().size(12).rounded_full().bg(t.foreground));
+    const knob = switchKnob(this.sleepOff === false);
     const item = (id) => h_flex().id(id).h(30).px(8).gap(9).items_center().rounded(6).cursor_pointer()
       .text_color(t.foreground).hover((s) => s.bg(t.hover));
     return v_flex().size_full().p(4).gap(2).bg(t.surface).text_size(13)
@@ -66,6 +66,10 @@ export default class WorkspaceChrome extends View {
         .on_click((_e, cx) => this.toggleSleep(cx))
         .child(div().flex_1().child("Sleep idle Claude panes"))
         .child(this.sleepOff === null ? div().text_color(t.dim).child("…") : knob))
+      .child(item("calm").tooltip("Stops spinners, Poké Balls and animated Pokémon, so the window redraws only when something changes. Uses much less CPU.")
+        .on_click(() => setShared("ui.calm", !shared("ui.calm")))
+        .child(div().flex_1().child("Calm mode"))
+        .child(switchKnob(Boolean(shared("ui.calm")))))
       .child(div().h(1).mx(4).bg(t.border))
       .child(item("all").on_click(() => { closeOverlay(props().overlay); run("app.settings"); })
         .child(svg("mods/chrome-dev/settings.svg").size(14).text_color(t.muted)).child("All settings…"));
@@ -84,7 +88,7 @@ export default class WorkspaceChrome extends View {
       const ready = div().size(6).rounded_full().bg(t.accent);
       return v_flex().size_full().bg(t.chrome).border_t(1).border_color(t.border).px(8).pt(4).pb(8).text_size(13)
         .when(collapsed, el => el.px(0).items_center())
-        .child(row("settings", "settings", "Settings", false, () => openOverlay({ mod: "chrome-dev", kind: "popup", width: 250, height: 76, props: { settingsMenu: true } }))
+        .child(row("settings", "settings", "Settings", false, () => openOverlay({ mod: "chrome-dev", kind: "popup", width: 250, height: 108, props: { settingsMenu: true } }))
           .when(Boolean(updates().app.ready), el => el.child(collapsed ? ready.absolute().top(5).right(6) : ready)))
         .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })));
     }

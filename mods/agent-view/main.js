@@ -158,7 +158,7 @@ export default class AgentView extends View {
     const result = lines.slice(0, RESULT_LINES).join("\n") + (lines.length > RESULT_LINES ? `\n… ${lines.length - RESULT_LINES} more lines` : "");
     return v_flex().gap(4).p(10).rounded(8).border_1().border_color(s.error ? t.blocked : t.border).bg(t.surface)
       .child(h_flex().gap(8).items_center().text_size(12)
-        .child(s.result === null ? svg(ICON("spinner")).size(12).flex_none().text_color(t.working).spin(900)
+        .child(s.result === null ? svg(ICON("spinner")).size(12).flex_none().text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900))
           : svg(ICON(s.error ? "square" : "check")).size(12).flex_none().text_color(s.error ? t.blocked : t.done))
         .child(div().flex_none().font_semibold().text_color(t.foreground).child(s.name))
         .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(s.title))
@@ -180,7 +180,7 @@ export default class AgentView extends View {
         .child(h_flex().gap(8).items_center()
           .child(div().px(6).rounded(5).bg(t.raised).text_size(11).text_color(t.muted).child(p.type ?? "agent"))
           .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(p.description || p.id || "Subagent"))
-          .when(!this.finished, (el) => el.child(svg(ICON("spinner")).size(12).text_color(t.working).spin(900)))
+          .when(!this.finished, (el) => el.child(svg(ICON("spinner")).size(12).text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900))))
           .child(div().text_size(12).text_color(status[1]).child(status[0])))
         .when(!this.finished && Boolean(now), (el) => el.child(div().truncate().text_size(12).text_color(t.muted)
           .child(`Now: ${now.kind === "tool" ? `${now.name} ${now.title}` : short(now.text, 160)}`)))

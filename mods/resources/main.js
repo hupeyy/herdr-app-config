@@ -296,7 +296,7 @@ export default class Resources extends View {
     const button = (id, label, enabled, onClick, icon) => h_flex().id(id).h(30).px(10).gap(6).items_center().rounded(7).flex_none()
       .border_1().border_color(t.input).text_color(enabled ? t.foreground : t.dim)
       .when(enabled, (el) => el.cursor_pointer().hover((st) => st.bg(t.hover)).on_click(onClick))
-      .when(Boolean(icon), (el) => el.child(running && icon === "spinner" ? svg(ICON("spinner")).size(12).spin(900) : svg(ICON(icon)).size(12)))
+      .when(Boolean(icon), (el) => el.child(running && icon === "spinner" ? svg(ICON("spinner")).size(12).when(!shared("ui.calm"), (el) => el.spin(900)) : svg(ICON(icon)).size(12)))
       .child(label);
     return h_flex().gap(10).items_center()
       .child(svg(ICON("archive")).size(16).flex_none().text_color(t.muted))
@@ -394,7 +394,7 @@ export default class Resources extends View {
         .child(h_flex().id("refresh").px(8).h(26).gap(6).items_center().rounded(6).cursor_pointer().text_color(t.foreground)
           .hover((st) => st.bg(t.hover)).on_click((_e, cx) => this.refresh(cx))
           .child("Refresh")
-          .child(this.busy ? svg(ICON("spinner")).size(12).text_color(t.muted).spin(900) : div().size(12))))
+          .child(this.busy ? svg(ICON("spinner")).size(12).text_color(t.muted).when(!shared("ui.calm"), (el) => el.spin(900)) : div().size(12))))
       .when(this.view !== "main", (el) => el
         .child(h_flex().id("view-back").h(34).px(12).gap(6).flex_none().items_center().border_b(1).border_color(t.border)
           .cursor_pointer().text_color(t.foreground).hover((st) => st.bg(t.hover))

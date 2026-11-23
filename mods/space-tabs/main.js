@@ -172,7 +172,7 @@ export default class RootTabs extends View {
       .child(div().min_w(0).truncate().child(root.name))
       .when(mine.length > 1, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(mine.length))))
       .when(status === "blocked" || status === "done", (el) => el.child(div().flex_none().text_color(t[status]).child("●")))
-      .when(status === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(t.working).spin(900)));
+      .when(status === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900))));
   }
 
   render() {

@@ -2,7 +2,7 @@
 // this pane lists them, takes the answer, shows the grade and the model answer.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, TextView } from "gpui-base";
-import { exec, home, theme, watchFolder, setShared, checking, notify } from "herdr";
+import { exec, home, theme, watchFolder, setShared, checking, notify, shared } from "herdr";
 import { characterCard, radar, xpDelta } from "./rpg.js";
 
 const SCRIPT = () => `${home()}/.claude/learning/learn.mjs`;
@@ -187,7 +187,7 @@ export default class Learn extends View {
           .bg(t.solid).text_color(t.solid_foreground).when(this.busy, (el) => el.opacity(0.6))
           .when(!this.busy, (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.submit(q, cx)))
           .child(this.busy ? (q.kind === "choose" ? "Checking…" : "Grading…") : "Submit"))
-        .when(this.busy, (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(900)))
+        .when(this.busy, (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900))))
         .when(this.busy && q.kind !== "choose", (el) => el.child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).child("This can take a minute.")))
         // Beside the button, so it shows without scrolling.
         .when(!this.busy && Boolean(this.error), (el) => el.child(div().flex_1().min_w(0).text_size(11.5).text_color(t.ansi1).child(this.error))));

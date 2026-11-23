@@ -208,7 +208,7 @@ export default class SpaceSummary extends View {
     const s = STATES[verdict] ?? STATES.unknown;
     return h_flex().id(`${id}-chip`).w(112).flex_none().gap(6).items_center()
       .text_size(11.5).text_color(t[s.tone] ?? t.dim).tooltip(s.tip)
-      .child(verdict === "working" || verdict === "background" ? svg(ICON("spinner")).size(11).spin(verdict === "working" ? 900 : 2400)
+      .child(verdict === "working" || verdict === "background" ? svg(ICON("spinner")).size(11).when(!shared("ui.calm"), (el) => el.spin(verdict === "working" ? 900 : 2400))
         : verdict === "done" || verdict === "optional" ? svg(ICON("circle-check")).size(11)
         : div().text_size(9).child("●"))
       .child(s.label);
@@ -324,7 +324,7 @@ export default class SpaceSummary extends View {
           .cursor_pointer().text_color(t.foreground).hover((s) => s.bg(t.hover))
           .tooltip("Summarize every agent that is not working or blocked (Haiku)")
           .on_click((_e, cx) => this.summarize(cx))
-          .when(this.running(), (el) => el.child(svg(ICON("spinner")).size(12).text_color(t.muted).spin(900)))
+          .when(this.running(), (el) => el.child(svg(ICON("spinner")).size(12).text_color(t.muted).when(!shared("ui.calm"), (el) => el.spin(900))))
           .child(this.running() ? "Summarizing…" : "Summarize all"))
         .child(div().id("close-panel").px(6).py(2).rounded(5).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover))
           .on_click(() => closeOverlay(props()?.overlay)).child(svg(ICON("x")).size(12))))

@@ -315,10 +315,18 @@ async function agentShells(roots) {
 function statusIcon(t, status, shell) {
   if (!status) return div().w(12).flex_none();
   if (shell && status !== "working" && status !== "blocked" && status !== "error") return svg(ICON("terminal")).size(12).flex_none().text_color(t.working);
-  if (status === "working") return svg(ICON("spinner")).size(12).flex_none().text_color(t.working).spin(900);
+  if (status === "working") return svg(ICON("spinner")).size(12).flex_none().text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900));
   if (status === "blocked" || status === "error") return div().w(12).flex_none().text_size(11).text_color(t.blocked).child("●");
   if (status === "done") return svg(ICON("circle-check")).size(12).flex_none().text_color(t.done);
   return svg(ICON("circle-check")).size(12).flex_none().text_color(t.dim);
+}
+
+// Each card's Poké Ball is its own retained view, so an animation tick redraws only the balls that
+// changed. A tick that redrew the whole sidebar (14 a second while anything worked) cost ~18% CPU.
+const PANELS = new Map(); // key -> the sidebar that owns the balls
+class BallView extends View {
+  init(props) { this.key = props?.key; this.space = props?.space; }
+  render() { return PANELS.get(this.key)?.markView(this.space) ?? div(); }
 }
 
 export default class DevWorkspaces extends View {
@@ -365,10 +373,22 @@ export default class DevWorkspaces extends View {
     this.anyWorking = false;
     this.openedAt = new Map(); // waiting space id -> the tick its first opening started
     this.anyWaiting = false;
+    this.panelKey = `panel-${Date.now()}-${Math.random()}`;
+    PANELS.set(this.panelKey, this);
+    this.marks = new Map(); // space id -> what its ball shows (card() records it each render)
+    this.ballViews = new Map(); // space id -> its BallView entity
+    this.drawnMark = new Map(); // space id -> the frame its BallView last drew
     cx.timer.every(BALL_TICK_MS, (cx) => {
-      if (!(this.anyWorking || this.anyWaiting || this.shells.size) || !this.ballsReady.size) return;
-      this.ballTick += 1; // never wraps, so an opening's frame is ballTick minus its start
-      cx.notify();
+      const animate = (this.anyWorking || this.anyWaiting || this.shells.size) && this.ballsReady.size && !shared("ui.calm");
+      if (animate) this.ballTick += 1; // never wraps, so an opening's frame is ballTick minus its start
+      let attach = false;
+      for (const id of this.marks.keys()) {
+        if (!this.ballViews.has(id)) { this.ballViews.set(id, cx.new(BallView, { key: this.panelKey, space: id })); attach = true; continue; }
+        const frame = this.markKey(id);
+        if (frame !== this.drawnMark.get(id)) cx.notify(this.ballViews.get(id));
+      }
+      for (const [id, view] of this.ballViews) if (!this.marks.has(id)) { view.release(); this.ballViews.delete(id); this.drawnMark.delete(id); }
+      if (attach) cx.notify(); // the sidebar picks up the new ball views
     });
     cx.timer.every(WORK_POLL_MS, (cx) => this.pollWork(cx));
     this.pollWork(cx);
@@ -600,6 +620,44 @@ export default class DevWorkspaces extends View {
     return { rows, mine };
   }
 
+  // Which frame a space's ball shows now: BallView redraws only when this changes.
+  markKey(id) {
+    const m = this.marks.get(id);
+    if (!m) return "";
+    const opening = (this.ballTick - (this.openedAt.get(id) ?? this.ballTick)) % OPEN_CYCLE;
+    if (m.status === "blocked") return m.drawn ? `b${opening < OPEN_FRAMES ? opening : "o"}` : "bdot";
+    if (m.status === "working") return m.drawn ? `w${this.ballTick % 1000}` : "wspin";
+    if (m.shell) return m.drawn ? `s${this.ballTick % 1000}` : "sterm";
+    return m.drawn ? `still-${m.d}` : `tile-${m.fill}-${m.icon ?? ""}`;
+  }
+
+  // The space's own mark, like Orca's dot: the Poké Ball open when an agent needs input (a red
+  // dot until the art is ready); rocking and hopping while one works (a spinner until then);
+  // spinning with a pause while an agent's shell runs (a terminal icon until then); else
+  // standing still (the color tile until then). Frames are 18x24 (ball, room, a shadow), spin
+  // frames 24x24 for their streaks; all sit in 24x24 cells of one sheet. The slot is 20 wide (a
+  // spin's streaks overhang it), so titles stay put.
+  // Frames show at their own size: scaled, nearest-neighbour pixels blur.
+  markView(id) {
+    const m = this.marks.get(id);
+    if (!m) return div();
+    this.drawnMark.set(id, this.markKey(id));
+    const t = theme();
+    const { status, drawn, d, shell, fill, icon } = m;
+    const ball = (cell) => div().w(20).h(24).flex_none().flex().items_end().justify_center().child(ballCellImage(d, cell));
+    const opening = (this.ballTick - (this.openedAt.get(id) ?? this.ballTick)) % OPEN_CYCLE;
+    return status === "blocked" && drawn
+      ? ball(opening < OPEN_FRAMES ? openCell(opening) : OPEN_CELL)
+      : status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
+      : status === "working" && drawn ? ball(ballCell(this.ballTick))
+      : status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).when(!shared("ui.calm"), (el) => el.spin(900))
+      : shell && drawn ? ball(spinCell(this.ballTick))
+      : shell ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
+      : drawn ? ball(STILL_CELL)
+      : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
+        .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color(inkOn(fill))));
+  }
+
   card(t, space, ctx) {
     const { rows, mine } = this.childRows(space, ctx);
     const tabCount = new Set(mine.map((p) => p.tab)).size; // the agent viewer tab is not counted
@@ -630,32 +688,14 @@ export default class DevWorkspaces extends View {
     const folder = mine.find((p) => p.cwd)?.cwd ?? space.folder;
     const fill = fillOf(t, (shared("space.colors") ?? {})[space.id] ?? "ansi6");
     const icon = (shared("space.icons") ?? {})[space.id];
-    // The space's own mark, like Orca's dot: the Poké Ball open when an agent needs input (a red
-    // dot until the art is ready); rocking and hopping while one works (a spinner until then);
-    // spinning with a pause while an agent's shell runs (a terminal icon until then); else
-    // standing still (the color tile until then). Frames are 18x24 (ball, room, a shadow), spin
-    // frames 24x24 for their streaks; all sit in 24x24 cells of one sheet. The slot is 20 wide (a
-    // spin's streaks overhang it), so titles stay put.
-    // Frames show at their own size: scaled, nearest-neighbour pixels blur.
-    const ball = (cell) => div().w(20).h(24).flex_none().flex().items_end().justify_center().child(ballCellImage(d, cell));
     const d = this.balls?.[space.id] ?? "classic";
     const drawn = this.ballsReady.has(d);
     // Herdr's space.status ranks done above working, so one finished sub-agent would stop the ball
     // while its parent still works: the card ranks its own rows, working above done.
     const status = rollupStatus(rows.map((r) => r.status)) ?? space.status;
     this.spaceStatus.set(space.id, status);
-    const working = status === "working" && drawn;
-    const opening = (this.ballTick - (this.openedAt.get(space.id) ?? this.ballTick)) % OPEN_CYCLE;
-    const mark = status === "blocked" && drawn
-      ? ball(opening < OPEN_FRAMES ? openCell(opening) : OPEN_CELL)
-      : status === "blocked" ? div().w(12).flex_none().text_size(12).text_color(t.blocked).child("●")
-      : working ? ball(ballCell(this.ballTick))
-      : status === "working" ? svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900)
-      : rows.some((r) => r.shell) && drawn ? ball(spinCell(this.ballTick))
-      : rows.some((r) => r.shell) ? svg(ICON("terminal")).size(11).flex_none().text_color(t.working)
-      : drawn ? ball(STILL_CELL)
-      : h_flex().size(icon ? 14 : 10).flex_none().rounded(icon ? 4 : 5).bg(fill).items_center().justify_center()
-        .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(9).text_color(inkOn(fill))));
+    this.marks.set(space.id, { status, drawn, d, shell: rows.some((r) => r.shell), fill, icon });
+    const mark = this.ballViews.get(space.id) ?? this.markView(space.id);
     // Collapsed, the card shows its most urgent top-level agent (newest first among equals), never a
     // sub-agent: those rows are "agent-" (Agent tool) and "sub-" (child terminals). The mark still
     // rolls the sub-agents in, so a working child keeps the card in progress.
@@ -745,7 +785,7 @@ export default class DevWorkspaces extends View {
       const d = this.balls?.[s.id] ?? "classic";
       const name = n && `${this.shiny?.[s.id] ? "Shiny " : ""}${nameOf(n)}`;
       art[s.id] = {
-        pokemon: !n ? null : sprite?.path ? { path: sprite.path, w: sprite.w, h: sprite.h, name }
+        pokemon: !n ? null : sprite?.path && !shared("ui.calm") ? { path: sprite.path, w: sprite.w, h: sprite.h, name }
           : { ...iconBox(n, 20), path: `${POKEMON_DIR}/${n}.png`, name },
         ball: this.ballsReady.has(d) ? { sheet: ballName(d, "sheet"), cells: SHEET_CELLS } : null,
       };
@@ -809,7 +849,7 @@ export default class DevWorkspaces extends View {
   pokemonArt(key, w, h) {
     const n = dexOf(key);
     const sprite = this.sprites.get(key);
-    const fit = sprite?.path ? Math.min(w / sprite.w, h / sprite.h) : 0;
+    const fit = sprite?.path && !shared("ui.calm") ? Math.min(w / sprite.w, h / sprite.h) : 0; // calm: the still icon
     return fit ? h_flex().items_center()
         .child(image(sprite.path).w(Math.round(sprite.w * fit)).h(Math.round(sprite.h * fit)))
         .child(div().w(1).h(1).bg("#000000").loop("opacity", { from: 0, to: 0.01, period: 1000 }))
@@ -1070,6 +1110,7 @@ export default class DevWorkspaces extends View {
     this.settle(ctx.allPanes);
     setAgentOrder(ctx.allAgents.filter((a) => mine.some((s) => s.id === a.space)).map((a) => a.address));
 
+    for (const id of this.marks.keys()) if (!mine.some((s) => s.id === id)) this.marks.delete(id);
     const locked = mine.filter((s) => isLocked(s.id));
     const open = mine.filter((s) => !isLocked(s.id));
     const cardsOf = (s) => {
