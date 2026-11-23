@@ -73,6 +73,54 @@ function tokenize(text) {
   return out;
 }
 
+// A prompt Claude draws in the terminal (a permission, a multi-select): its question, the lines
+// just above it, its numbered options with the one the cursor is on, and the keys its footer
+// offers ("Esc to cancel · Tab to amend"). Null when the screen holds no numbered options.
+const OPTION = /^\s*([\u276f\u203a>])?\s*(\d+)\.\s+(.+?)\s*$/;
+function readPrompt(lines) {
+  if (!lines?.length) return null;
+  let end = lines.length - 1;
+  while (end >= 0 && !OPTION.test(lines[end])) end--;
+  if (end < 0) return null;
+  // Walk up from the last option. A long option wraps onto deeper-indented lines (a path, "from
+  // this project"); those join the option above them. A shallow line that is no option (the
+  // question) ends the list.
+  const options = [];
+  let wrap = [];
+  let start = end;
+  for (let i = end; i >= 0; i--) {
+    const m = lines[i].match(OPTION);
+    if (m && /^\s{0,3}\S/.test(lines[i])) {
+      options.unshift({ n: Number(m[2]), label: [m[3], ...wrap].join(" "), current: Boolean(m[1]) });
+      wrap = [];
+      start = i;
+    } else if (/^\s{4,}\S/.test(lines[i])) wrap.unshift(lines[i].trim());
+    else break;
+  }
+  if (options.length < 2) return null;
+  // Only the lines after the last separator (a dotted or ruled line) belong to the prompt; above
+  // it is the command or diff being asked about.
+  const raw = lines.slice(Math.max(0, start - 12), start).map((l) => l.replace(/^[\s\u2502|]+/, "").trim());
+  const isSep = (l) => /^[\u2500-\u257f\-=.\u00b7]{4,}$/.test(l);
+  const sep = raw.map(isSep).lastIndexOf(true);
+  let above = raw.slice(sep + 1).filter(Boolean);
+  // Nothing between the separator and the question: show what is being asked about instead
+  // (the command between the last two separators).
+  if (above.length <= 1 && sep > 0) {
+    const prev = raw.slice(0, sep).map(isSep).lastIndexOf(true);
+    above = [...raw.slice(prev + 1, sep).filter(Boolean).slice(-3), ...above];
+  }
+  const qi = above.map((l) => l.endsWith("?")).lastIndexOf(true);
+  const question = qi >= 0 ? above[qi] : above[above.length - 1] ?? "";
+  const context = (qi >= 0 ? above.slice(0, qi) : above.slice(0, -1)).slice(-3);
+  const footer = lines.slice(end + 1).join(" ");
+  return {
+    question, context, options,
+    cursor: Math.max(0, options.findIndex((o) => o.current)),
+    esc: /esc to (cancel|exit|go back)/i.test(footer), tab: /tab to (amend|edit)/i.test(footer),
+  };
+}
+
 export default class Reader extends View {
   init(_props, cx) {
     const p = props() ?? {};
@@ -129,14 +177,23 @@ export default class Reader extends View {
     if (status === "blocked" || this.waiting.ask) {
       const r = await exec("hc", ["read", this.terminal, "--lines", "0"]).catch(() => null);
       const lines = (r?.stdout ?? "").split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
-      this.screen = lines.slice(-18);
+      this.screen = lines.slice(-60);
       cx.notify();
     } else if (this.screen) { this.screen = null; cx.notify(); }
   }
 
-  async sendInput(cx) {
+  async sendInput(cx, force) {
     const text = this.input.value().replace(/\s+$/, "");
     if (!text.trim()) return;
+    // The box still starting with the message sent last ("no" then "noyes") means old text was
+    // left in it: ask before sending instead of sending the run-together text.
+    const last = this.lastSent;
+    if (!force && last && Date.now() - last.at < 30 * 60000 && text.length > last.text.length && text.startsWith(last.text)) {
+      this.leftover = { text, rest: text.slice(last.text.length).replace(/^\s+/, ""), old: last.text };
+      cx.notify();
+      return;
+    }
+    this.leftover = null;
     this.input.set_value("");
     this.pending.push({ text, t: new Date().toISOString() });
     this.follow = true;
@@ -268,6 +325,9 @@ export default class Reader extends View {
   async send(text, cx) {
     this.sentAt = Date.now();
     this.picks = {};
+    this.lastSent = { text, at: Date.now() };
+    // A dock answer leaves no copy of itself in the message box.
+    if (this.input.value().trim() === text.trim()) this.input.set_value("");
     cx.notify();
     await exec("node", [`${appHome()}/hx/hx.mjs`, "send", this.terminal, text]);
   }
@@ -586,9 +646,38 @@ export default class Reader extends View {
           .child(btn("ask-send", "Send answers", ready, submit)),
       ]);
     }
-    // A prompt drawn in the terminal (permission, multi-select): show its screen and press its keys.
+    // A prompt drawn in the terminal (permission, multi-select): its question and one button per
+    // option it really has. A press moves the cursor to that option and presses Enter. The screen
+    // itself is one click away; when no options can be read, the key pad below stays.
     if (status === "blocked" || this.waiting.ask) {
       const key = (id, label, k, primary) => btn(`k-${id}`, label, primary, () => this.keys(k));
+      const prompt = readPrompt(this.screen);
+      if (prompt) {
+        const choose = (i) => {
+          const d = i - prompt.cursor;
+          const keys = [...Array(Math.abs(d)).fill(d > 0 ? "down" : "up"), "enter"];
+          exec("hc", ["keys", this.terminal, ...keys]);
+          this.sentAt = Date.now() - 6500;
+          this.screen = null;
+        };
+        const showScreen = this.open.has("dock-screen");
+        return frame(this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
+          ...prompt.context.map((l, j) => div().id(`pc-${j}`).text_size(12).text_color(t.muted).child(l)),
+          div().text_size(13).font_weight(600).text_color(t.foreground).child(prompt.question),
+          ...prompt.options.map((o, i) => h_flex().id(`po-${o.n}`).gap(10).items_start().w_full().px(10).py(7).rounded(7).cursor_pointer()
+            .border_1().border_color(o.current ? t.accent : t.input).bg(t.background).hover((st) => st.border_color(t.accent).bg(t.hover))
+            .on_click(() => choose(i))
+            .child(div().flex_none().text_color(t.accent).font_weight(700).child(String(o.n)))
+            .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(o.label))),
+          h_flex().flex_wrap().gap(6)
+            .when(prompt.esc, (el) => el.child(key("esc", "Cancel (Esc)", "esc")))
+            .when(prompt.tab, (el) => el.child(key("tab", "Amend (Tab)", "tab")))
+            .child(btn("scr", showScreen ? "Hide terminal text" : "Terminal text", false, (_e, cx) => { showScreen ? this.open.delete("dock-screen") : this.open.add("dock-screen"); cx.notify(); }))
+            .child(btn("term", "Show terminal", false, () => this.showTerminal(true))),
+          ...(showScreen ? [v_flex().id("screen").p(8).rounded(6).bg(t.chrome).border_1().border_color(t.border).font_family("Cascadia Mono").text_size(11)
+            .text_color(t.muted).overflow_x_scroll().children(this.screen.slice(-30).map((l, j) => div().id(`sc-${j}`).whitespace_nowrap().child(l)))] : []),
+        ]);
+      }
       return frame(this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
         v_flex().id("screen").p(8).rounded(6).bg(t.chrome).border_1().border_color(t.border).font_family("Cascadia Mono").text_size(11.5)
           .text_color(t.foreground).overflow_x_scroll()
@@ -708,6 +797,19 @@ export default class Reader extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(report || "Claude is working..."))
       .child(div().id("stop").flex_none().px(8).py(2).rounded(5).text_size(11.5).cursor_pointer().border_1().border_color(t.blocked).text_color(t.blocked)
         .hover((s) => s.bg(t.hover)).tooltip("Stop this turn (Esc in the terminal)").on_click(() => exec("hc", ["interrupt", this.terminal])).child("Stop")) : null;
+    const leftover = this.leftover ? v_flex().id("leftover").flex_none().gap(6).px(14).py(8).border_t(1).border_color(t.border).bg(t.surface)
+      .child(div().text_size(12.5).text_color(t.foreground)
+        .child(`The box still had "${this.leftover.old}" from your last message. Send "${this.leftover.rest}" instead?`))
+      .child(h_flex().gap(6)
+        .child(div().id("lo-rest").px(10).py(3).rounded(6).text_size(12).cursor_pointer().bg(t.accent).text_color(t.accent_foreground)
+          .on_click((_e, cx) => { this.input.set_value(this.leftover.rest); this.leftover = null; this.sendInput(cx, true); })
+          .child(`Send "${this.leftover.rest.slice(0, 40)}"`))
+        .child(div().id("lo-all").px(10).py(3).rounded(6).text_size(12).cursor_pointer().bg(t.raised).border_1().border_color(t.input)
+          .on_click((_e, cx) => { this.leftover = null; this.sendInput(cx, true); })
+          .child("Send all of it"))
+        .child(div().id("lo-edit").px(10).py(3).rounded(6).text_size(12).cursor_pointer().text_color(t.muted)
+          .on_click((_e, cx) => { this.leftover = null; this.input.focus(); cx.notify(); })
+          .child("Edit"))) : null;
     const composer = h_flex().id("composer").flex_none().gap(8).items_end().px(10).py(8).border_t(1).border_color(t.border).bg(t.surface)
       .child(div().flex_1().min_w(0).rounded(7).border_1().border_color(t.input).bg(t.background).p(4)
         .child(Textarea.new(this.input).w_full().text_size(12.5)))
@@ -749,7 +851,7 @@ export default class Reader extends View {
       .child(header)
       .child(h_flex().flex_1().min_h(0).overflow_hidden()
         .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(stream)
-          .when(Boolean(activity), (el) => el.child(activity)).when(Boolean(dock), (el) => el.child(dock)).child(composer))
+          .when(Boolean(activity), (el) => el.child(activity)).when(Boolean(dock), (el) => el.child(dock)).when(Boolean(leftover), (el) => el.child(leftover)).child(composer))
         .when(wide, (el) => el.child(this.side(t))));
   }
 }
