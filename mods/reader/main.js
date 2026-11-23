@@ -121,6 +121,15 @@ function readPrompt(lines) {
   };
 }
 
+// The message list is the costly part of the Reader, so it lives in a retained child view that
+// rebuilds only when the chat or its own toggles change (refresh), not on every herdr change (an
+// agent's status, focus, shared state) that repaints the rest of the pane.
+const STREAMS = new Map(); // key -> Reader that owns the list
+class StreamView extends View {
+  init(props) { this.key = props?.key; }
+  render(cx) { return STREAMS.get(this.key)?.renderStream(cx) ?? div(); }
+}
+
 export default class Reader extends View {
   init(_props, cx) {
     const p = props() ?? {};
@@ -144,7 +153,10 @@ export default class Reader extends View {
     this.width = 0;
     this.scroll = ScrollHandle.new();
     this.follow = true;
-    this.full = new Set(); // messages already drawn in full (see render)
+    this.full = new Set(); // messages already drawn in full (see renderStream)
+    this.key = `reader-${Date.now()}-${Math.random()}`;
+    STREAMS.set(this.key, this);
+    this.streamView = cx.new(StreamView, { key: this.key });
     this.input = TextareaState.new({ placeholder: "Message Claude", rows: 2 });
     this.input.set_auto_grow(1, 8);
     this.input.on("submit", (_e, cx) => this.sendInput(cx));
@@ -179,8 +191,8 @@ export default class Reader extends View {
       const r = await exec("hc", ["read", this.terminal, "--lines", "0"]).catch(() => null);
       const lines = (r?.stdout ?? "").split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
       this.screen = lines.slice(-60);
-      cx.notify();
-    } else if (this.screen) { this.screen = null; cx.notify(); }
+      this.refresh(cx);
+    } else if (this.screen) { this.screen = null; this.refresh(cx); }
   }
 
   async sendInput(cx, force) {
@@ -191,7 +203,7 @@ export default class Reader extends View {
     const last = this.lastSent;
     if (!force && last && Date.now() - last.at < 30 * 60000 && text.length > last.text.length && text.startsWith(last.text)) {
       this.leftover = { text, rest: text.slice(last.text.length).replace(/^\s+/, ""), old: last.text };
-      cx.notify();
+      this.refresh(cx);
       return;
     }
     this.leftover = null;
@@ -214,7 +226,7 @@ export default class Reader extends View {
     if (!paths.length) return;
     this.input.replace(`${paths.join(" ")} `);
     this.input.focus();
-    cx.notify();
+    this.refresh(cx);
   }
 
   // ---- auto: one Reader per Claude pane in the shown tab ----
@@ -317,7 +329,7 @@ export default class Reader extends View {
       this.title = data.title;
       if (data.path && data.path !== this.path) { this.path = data.path; this.watch(cx); }
       if ((first || data.items.length) && this.follow) this.toBottom = true;
-      cx.notify();
+      this.refresh(cx);
     } catch {
       // a half-written state file or a busy machine: the next change or poll tries again
     } finally {
@@ -339,7 +351,7 @@ export default class Reader extends View {
     });
   }
 
-  async close() { this.watcher?.cancel(); this.scroll?.release(); }
+  async close() { this.watcher?.cancel(); this.scroll?.release(); STREAMS.delete(this.key); this.streamView?.release(); }
 
   // Types the answer into the chat (hx wakes a sleeping pane first), as if Alex typed it.
   async send(text, cx) {
@@ -348,7 +360,7 @@ export default class Reader extends View {
     this.lastSent = { text, at: Date.now() };
     // A dock answer leaves no copy of itself in the message box.
     if (this.input.value().trim() === text.trim()) this.input.set_value("");
-    cx.notify();
+    this.refresh(cx);
     await exec("node", [`${appHome()}/hx/hx.mjs`, "send", this.terminal, text]);
   }
 
@@ -491,7 +503,7 @@ export default class Reader extends View {
     return div().id(`copy-${key}`).flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
       .text_color(done ? t.done : t.dim).hover((st) => st.bg(t.hover).text_color(t.foreground))
       .tooltip("Copy to the clipboard")
-      .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(text); this.copied = { key, at: Date.now() }; cx.notify(); })
+      .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(text); this.copied = { key, at: Date.now() }; this.refresh(cx); })
       .child(done ? "Copied" : label);
   }
 
@@ -504,7 +516,7 @@ export default class Reader extends View {
       .child(this.copyBtn(t, id, text))
       .child(div().id(`${id}-sel-btn`).flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
         .text_color(selecting ? t.accent : t.dim).hover((st) => st.bg(t.hover).text_color(t.foreground))
-        .on_click((_e, cx) => { selecting ? this.selecting.delete(id) : this.selecting.add(id); cx.notify(); })
+        .on_click((_e, cx) => { selecting ? this.selecting.delete(id) : this.selecting.add(id); this.refresh(cx); })
         .child(selecting ? "Done selecting" : "Select text"));
   }
 
@@ -526,7 +538,7 @@ export default class Reader extends View {
           .child(this.copyBtn(t, `${id}-cmd2`, cmd, "Copy command")))
         .child(div().text_color(t.ansi3).child(TextView.markdown(`${id}-cmdtext`, fence(shown)).selectable(true)))
         .when(lines.length > CMD_LINES, (x) => x.child(div().id(`${id}-cmdmore`).text_size(11.5).text_color(t.accent).cursor_pointer()
-          .on_click((_e, cx) => { all ? this.open.delete(`${id}-cmdall`) : this.open.add(`${id}-cmdall`); cx.notify(); })
+          .on_click((_e, cx) => { all ? this.open.delete(`${id}-cmdall`) : this.open.add(`${id}-cmdall`); this.refresh(cx); })
           .child(all ? "Show less" : `Show all ${lines.length} lines`))))
       .child(div().text_color(r.err ? t.blocked : t.muted)
         .child(TextView.markdown(`${id}-out`, fence(r.head.join("\n") || " ")).selectable(true)))
@@ -541,7 +553,7 @@ export default class Reader extends View {
     if (compact && ["user", "peer", "asst", "recap"].includes(it.k) && !this.open.has(id)) {
       const who = it.k === "user" ? "You" : it.k === "peer" ? it.from : it.k === "recap" ? "While you were away" : "Claude";
       return h_flex().id(id).gap(8).px(14).py(5).text_size(12).cursor_pointer().hover((s) => s.bg(t.hover))
-        .border_b(1).border_color(t.border).on_click((_e, cx) => { this.open.add(id); cx.notify(); })
+        .border_b(1).border_color(t.border).on_click((_e, cx) => { this.open.add(id); this.refresh(cx); })
         .child(div().flex_none().font_weight(700).text_color(it.k === "peer" ? t.accent : it.k === "user" ? t.foreground : t.muted).child(who))
         .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(String(it.text).replace(/\s+/g, " ").slice(0, 300)))
         .child(div().flex_none().text_color(t.dim).child(clock(it.t)));
@@ -561,7 +573,7 @@ export default class Reader extends View {
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.accent).font_weight(700).child(it.from)).child(it.pasted ? "pasted by you" : "message from another agent").child(clock(it.t)))
         .child(this.selecting.has(id) ? this.selectable(id, it.text) : this.inline(t, it.text.length > 1500 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1500)}…` : it.text, `${id}-x`))
         .when(!this.selecting.has(id) && it.text.length > 1500 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
-          .on_click((_e, cx) => { this.open.add(`${id}-all`); cx.notify(); }).child("Show all")))
+          .on_click((_e, cx) => { this.open.add(`${id}-all`); this.refresh(cx); }).child("Show all")))
         .child(this.actions(t, id, it.text));
     }
     if (it.k === "asst") {
@@ -571,7 +583,7 @@ export default class Reader extends View {
       return v_flex().id(id).gap(4).px(14).py(7)
         .child(selecting ? this.selectable(id, it.text) : this.rich(t, text, `${id}-r`))
         .when(long && !selecting, (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
-          .on_click((_e, cx) => { this.open.add(id); cx.notify(); }).child(`Show more (${(it.text.length - LONG).toLocaleString()} characters)`)))
+          .on_click((_e, cx) => { this.open.add(id); this.refresh(cx); }).child(`Show more (${(it.text.length - LONG).toLocaleString()} characters)`)))
         .child(this.actions(t, id, it.text));
     }
     if (it.k === "tool") {
@@ -581,7 +593,7 @@ export default class Reader extends View {
       return v_flex().id(id).mx(14).my(2)
         .child(h_flex().id(`${id}-row`).gap(8).px(8).py(3).rounded(6).bg(t.chrome).border_1().border_color(r?.err ? t.blocked : t.border)
           .text_size(11.5).cursor_pointer().hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { if (isOpen) { this.open.delete(id); this.open.add(`${id}-shut`); } else { this.open.add(id); this.open.delete(`${id}-shut`); } cx.notify(); })
+          .on_click((_e, cx) => { if (isOpen) { this.open.delete(id); this.open.add(`${id}-shut`); } else { this.open.add(id); this.open.delete(`${id}-shut`); } this.refresh(cx); })
           .child(div().flex_none().text_color(t.ansi6).font_weight(700).child(it.name))
           .child(div().flex_1().min_w(0).truncate().text_color(it.file ? t.ansi6 : t.muted).child(it.file ? base(it.file) : it.label || ""))
           .when(Boolean(r?.image), (el) => el.child(div().flex_none().text_color(t.dim).child("image")))
@@ -607,7 +619,7 @@ export default class Reader extends View {
       if (it.kind === "summary") {
         const isOpen = this.open.has(id);
         return v_flex().id(id).px(14).py(5).text_size(11.5).text_color(t.dim).cursor_pointer()
-          .on_click((_e, cx) => { isOpen ? this.open.delete(id) : this.open.add(id); cx.notify(); })
+          .on_click((_e, cx) => { isOpen ? this.open.delete(id) : this.open.add(id); this.refresh(cx); })
           .child(`Summary of the earlier conversation (${it.text.split(/\s+/).length.toLocaleString()} words) · ${isOpen ? "hide" : "show"}`)
           .when(isOpen, (el) => el.child(div().pt(6).child(this.rich(t, it.text, `${id}-r`))));
       }
@@ -648,7 +660,7 @@ export default class Reader extends View {
         if (ask.questions.length > 1) keys.push("enter");
         exec("hc", ["keys", this.terminal, ...keys]);
         this.sentAt = Date.now();
-        cx.notify();
+        this.refresh(cx);
       };
       return frame(ask.questions.length > 1 ? `Claude asks ${ask.questions.length} questions` : "Claude asks", [
         ...ask.questions.map((q, j) => v_flex().id(`aq-${j}`).gap(4)
@@ -658,7 +670,7 @@ export default class Reader extends View {
           .children(q.options.map((o, k) => h_flex().id(`aq-${j}-${k}`).gap(8).items_start().px(8).py(4).rounded(6).cursor_pointer()
             .border_1().border_color(picks[j] === k ? t.accent : t.input).bg(picks[j] === k ? t.selected : t.background)
             .hover((st) => st.border_color(t.accent))
-            .on_click((_e, cx) => { this.askPicks = { ...this.askPicks, [j]: k }; cx.notify(); })
+            .on_click((_e, cx) => { this.askPicks = { ...this.askPicks, [j]: k }; this.refresh(cx); })
             .child(div().flex_none().text_color(t.accent).font_weight(700).child(String(k + 1)))
             .child(v_flex().flex_1().min_w(0)
               .child(div().text_size(12.5).text_color(t.foreground).child(o.label))
@@ -696,7 +708,7 @@ export default class Reader extends View {
           h_flex().flex_wrap().gap(6)
             .when(prompt.esc, (el) => el.child(key("esc", "Cancel (Esc)", "esc")))
             .when(prompt.tab, (el) => el.child(key("tab", "Amend (Tab)", "tab")))
-            .child(btn("scr", showScreen ? "Hide terminal text" : "Terminal text", false, (_e, cx) => { showScreen ? this.open.delete("dock-screen") : this.open.add("dock-screen"); cx.notify(); }))
+            .child(btn("scr", showScreen ? "Hide terminal text" : "Terminal text", false, (_e, cx) => { showScreen ? this.open.delete("dock-screen") : this.open.add("dock-screen"); this.refresh(cx); }))
             .child(btn("term", "Show terminal", false, () => this.showTerminal(true))),
           ...(showScreen ? [v_flex().id("screen").p(8).rounded(6).bg(t.chrome).border_1().border_color(t.border).font_family("Cascadia Mono").text_size(11)
             .text_color(t.muted).overflow_x_scroll().children(this.screen.slice(-30).map((l, j) => div().id(`sc-${j}`).whitespace_nowrap().child(l)))] : []),
@@ -740,7 +752,7 @@ export default class Reader extends View {
               .children((x.options.length ? x.options.map((o) => String(o.n)) : ["yes", "no"]).map((v) => div().id(`nq-${x.n}-${v}`).px(8).text_size(11.5).cursor_pointer()
                 .bg(this.picks[x.n] === v ? t.accent : t.background).text_color(this.picks[x.n] === v ? t.accent_foreground : t.muted)
                 .tooltip(x.options.find((o) => String(o.n) === v)?.label ?? v)
-                .on_click((_e, cx) => { this.picks = { ...this.picks, [x.n]: v }; cx.notify(); }).child(v)))))
+                .on_click((_e, cx) => { this.picks = { ...this.picks, [x.n]: v }; this.refresh(cx); }).child(v)))))
           .children(x.options.map((o) => div().id(`nqo-${x.n}-${o.n}`).pl(18).text_size(11.5)
             .text_color(this.picks[x.n] === String(o.n) ? t.foreground : t.muted).child(`${o.n}  ${o.label}`)))),
         h_flex().gap(8).items_center()
@@ -784,62 +796,21 @@ export default class Reader extends View {
         .children(files.map((f, i) => chip(`f-${i}`, base(f), t.ansi6, null).tooltip(f))));
   }
 
-  render(cx) {
+  // Repaints this view and the retained message list.
+  refresh(cx) {
+    cx.notify();
+    if (this.streamView) cx.notify(this.streamView);
+  }
+
+  renderStream(cx) {
     const t = theme();
-    if (this.auto) return div().size_full();
-    if (this.stale && this.isShown()) { this.stale = false; cx.spawn(async (cx) => { await this.load(cx); }); }
-    const pane = panes().find((p) => p.terminal === this.terminal);
     const results = new Map(this.items.filter((x) => x.k === "result").map((x) => [x.id, x]));
     const answers = new Map(this.items.filter((x) => x.k === "answer").map((x) => [x.id, x.text]));
     const visible = this.items.filter((x) => x.k !== "result" && x.k !== "answer");
     const from = Math.max(0, visible.length - this.shown);
-    const status = pane?.status;
-    const dock = this.dock(t);
-    const wide = this.width >= 640;
-
-    const header = h_flex().id("hdr").flex_none().h(34).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.chrome)
-      .child(div().flex_none().text_size(12).font_weight(700).text_color(t.accent).child("Reader"))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(this.title ?? pane?.title ?? ""))
-      .child(div().flex_none().text_size(11).text_color(status === "working" ? t.working : status === "blocked" ? t.blocked : t.dim).child(status ?? ""))
-      .child(div().id("follow").flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
-        .bg(this.follow ? t.selected : t.chrome).text_color(this.follow ? t.foreground : t.dim)
-        .tooltip(this.follow ? "Following new messages. Click to stop." : "Click to follow new messages.")
-        .on_click((_e, cx) => { this.follow = !this.follow; if (this.follow) this.toBottom = true; cx.notify(); })
-        .child("Follow"))
-      .child(div().id("term").flex_none().px(6).rounded(4).text_size(11).cursor_pointer().bg(t.chrome).text_color(t.muted).hover((s) => s.bg(t.hover))
-        .tooltip(this.myPane()?.zoomed ? "Show the Claude terminal beside the Reader" : "Cover the terminal with the Reader")
-        .on_click(() => this.showTerminal(Boolean(this.myPane()?.zoomed)))
-        .child(this.myPane()?.zoomed ? "Terminal" : "Reader only"));
-
     const pendingRows = this.pending.map((m, i) => v_flex().id(`pend-${i}`).gap(3).px(14).py(9).bg(t.surface).border_b(1).border_color(t.border).opacity(0.7)
       .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.foreground).font_weight(700).child("You")).child("sending..."))
       .child(this.inline(t, m.text.length > 1200 ? `${m.text.slice(0, 1200)}...` : m.text, `pend-${i}-x`)));
-    const term = terminals().find((x) => x.address === this.terminal);
-    const report = typeof term?.report === "string" ? term.report : term?.report?.msg ?? term?.report?.message ?? null;
-    const activity = status === "working" ? h_flex().id("activity").flex_none().gap(8).items_center().px(14).py(6).border_t(1).border_color(t.border).bg(t.chrome)
-      .child(svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(report || "Claude is working..."))
-      .child(div().id("stop").flex_none().px(8).py(2).rounded(5).text_size(11.5).cursor_pointer().border_1().border_color(t.blocked).text_color(t.blocked)
-        .hover((s) => s.bg(t.hover)).tooltip("Stop this turn (Esc in the terminal)").on_click(() => exec("hc", ["interrupt", this.terminal])).child("Stop")) : null;
-    const leftover = this.leftover ? v_flex().id("leftover").flex_none().gap(6).px(14).py(8).border_t(1).border_color(t.border).bg(t.surface)
-      .child(div().text_size(12.5).text_color(t.foreground)
-        .child(`The box still had "${this.leftover.old}" from your last message. Send "${this.leftover.rest}" instead?`))
-      .child(h_flex().gap(6)
-        .child(div().id("lo-rest").px(10).py(3).rounded(6).text_size(12).cursor_pointer().bg(t.accent).text_color(t.accent_foreground)
-          .on_click((_e, cx) => { this.input.set_value(this.leftover.rest); this.leftover = null; this.sendInput(cx, true); })
-          .child(`Send "${this.leftover.rest.slice(0, 40)}"`))
-        .child(div().id("lo-all").px(10).py(3).rounded(6).text_size(12).cursor_pointer().bg(t.raised).border_1().border_color(t.input)
-          .on_click((_e, cx) => { this.leftover = null; this.sendInput(cx, true); })
-          .child("Send all of it"))
-        .child(div().id("lo-edit").px(10).py(3).rounded(6).text_size(12).cursor_pointer().text_color(t.muted)
-          .on_click((_e, cx) => { this.leftover = null; this.input.focus(); cx.notify(); })
-          .child("Edit"))) : null;
-    const composer = h_flex().id("composer").flex_none().gap(8).items_end().px(10).py(8).border_t(1).border_color(t.border).bg(t.surface)
-      .child(div().flex_1().min_w(0).rounded(7).border_1().border_color(t.input).bg(t.background).p(4)
-        .child(Textarea.new(this.input).w_full().text_size(12.5)))
-      .child(div().id("send").flex_none().px(12).py(5).rounded(7).text_size(12.5).font_weight(600).cursor_pointer()
-        .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.sendInput(cx)).child("Send"));
-
     // Build from the newest message back and stop drawing in full once the frame has spent its
     // budget (by words and by time): older messages draw as one line each. A message drawn in
     // full stays in full, so heights do not change between redraws and the view does not jump.
@@ -861,20 +832,73 @@ export default class Reader extends View {
     // the view only shows its top, which left the view a few scrolls short of the bottom.
     // scroll_to_item takes a real child index and is consumed after layout.
     if (this.toBottom) { this.toBottom = false; this.scroll.scroll_to_item(rows.length + (from > 0 ? 1 : 0)); }
-    const stream = v_flex().id("stream").flex_1().min_h(0).overflow_y_scroll().track_scroll(this.scroll).pb(8)
+    return v_flex().id("stream").size_full().min_h(0).overflow_y_scroll().track_scroll(this.scroll).pb(8)
+      .bg(t.background).text_size(12.5).text_color(t.foreground)
       .when(from > 0, (el) => el.child(div().id("earlier").px(14).py(6).text_size(11.5).text_color(t.accent).cursor_pointer()
-        .on_click((_e, cx) => { this.shown += SHOWN; this.follow = false; cx.notify(); })
+        .on_click((_e, cx) => { this.shown += SHOWN; this.follow = false; this.refresh(cx); })
         .child(`Show earlier (${from.toLocaleString()} more)`)))
       .children(rows)
       .child(div().id("stream-end").h(1).flex_none())
       .when(!this.items.length, (el) => el.child(div().p(14).text_size(12).text_color(t.dim)
         .child(this.sessionOf() ? "Reading the chat…" : "No Claude session in this pane yet.")));
+  }
+
+  render(cx) {
+    const t = theme();
+    if (this.auto) return div().size_full();
+    // A Reader in a tab that is not shown draws nothing: herdr repaints every copy on each change.
+    if (!this.isShown()) return div().size_full().bg(t.background);
+    if (this.stale && this.isShown()) { this.stale = false; cx.spawn(async (cx) => { await this.load(cx); }); }
+    const pane = panes().find((p) => p.terminal === this.terminal);
+    const status = pane?.status;
+    const dock = this.dock(t);
+    const wide = this.width >= 640;
+
+    const header = h_flex().id("hdr").flex_none().h(34).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.chrome)
+      .child(div().flex_none().text_size(12).font_weight(700).text_color(t.accent).child("Reader"))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(this.title ?? pane?.title ?? ""))
+      .child(div().flex_none().text_size(11).text_color(status === "working" ? t.working : status === "blocked" ? t.blocked : t.dim).child(status ?? ""))
+      .child(div().id("follow").flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
+        .bg(this.follow ? t.selected : t.chrome).text_color(this.follow ? t.foreground : t.dim)
+        .tooltip(this.follow ? "Following new messages. Click to stop." : "Click to follow new messages.")
+        .on_click((_e, cx) => { this.follow = !this.follow; if (this.follow) this.toBottom = true; this.refresh(cx); })
+        .child("Follow"))
+      .child(div().id("term").flex_none().px(6).rounded(4).text_size(11).cursor_pointer().bg(t.chrome).text_color(t.muted).hover((s) => s.bg(t.hover))
+        .tooltip(this.myPane()?.zoomed ? "Show the Claude terminal beside the Reader" : "Cover the terminal with the Reader")
+        .on_click(() => this.showTerminal(Boolean(this.myPane()?.zoomed)))
+        .child(this.myPane()?.zoomed ? "Terminal" : "Reader only"));
+
+    const term = terminals().find((x) => x.address === this.terminal);
+    const report = typeof term?.report === "string" ? term.report : term?.report?.msg ?? term?.report?.message ?? null;
+    const activity = status === "working" ? h_flex().id("activity").flex_none().gap(8).items_center().px(14).py(6).border_t(1).border_color(t.border).bg(t.chrome)
+      .child(svg(ICON("spinner")).size(11).flex_none().text_color(t.working).spin(900))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(report || "Claude is working..."))
+      .child(div().id("stop").flex_none().px(8).py(2).rounded(5).text_size(11.5).cursor_pointer().border_1().border_color(t.blocked).text_color(t.blocked)
+        .hover((s) => s.bg(t.hover)).tooltip("Stop this turn (Esc in the terminal)").on_click(() => exec("hc", ["interrupt", this.terminal])).child("Stop")) : null;
+    const leftover = this.leftover ? v_flex().id("leftover").flex_none().gap(6).px(14).py(8).border_t(1).border_color(t.border).bg(t.surface)
+      .child(div().text_size(12.5).text_color(t.foreground)
+        .child(`The box still had "${this.leftover.old}" from your last message. Send "${this.leftover.rest}" instead?`))
+      .child(h_flex().gap(6)
+        .child(div().id("lo-rest").px(10).py(3).rounded(6).text_size(12).cursor_pointer().bg(t.accent).text_color(t.accent_foreground)
+          .on_click((_e, cx) => { this.input.set_value(this.leftover.rest); this.leftover = null; this.sendInput(cx, true); })
+          .child(`Send "${this.leftover.rest.slice(0, 40)}"`))
+        .child(div().id("lo-all").px(10).py(3).rounded(6).text_size(12).cursor_pointer().bg(t.raised).border_1().border_color(t.input)
+          .on_click((_e, cx) => { this.leftover = null; this.sendInput(cx, true); })
+          .child("Send all of it"))
+        .child(div().id("lo-edit").px(10).py(3).rounded(6).text_size(12).cursor_pointer().text_color(t.muted)
+          .on_click((_e, cx) => { this.leftover = null; this.input.focus(); this.refresh(cx); })
+          .child("Edit"))) : null;
+    const composer = h_flex().id("composer").flex_none().gap(8).items_end().px(10).py(8).border_t(1).border_color(t.border).bg(t.surface)
+      .child(div().flex_1().min_w(0).rounded(7).border_1().border_color(t.input).bg(t.background).p(4)
+        .child(Textarea.new(this.input).w_full().text_size(12.5)))
+      .child(div().id("send").flex_none().px(12).py(5).rounded(7).text_size(12.5).font_weight(600).cursor_pointer()
+        .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.sendInput(cx)).child("Send"));
 
     return v_flex().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_size(12.5).text_color(t.foreground)
-      .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 2) { this.width = size.width; cx.notify(); } })
+      .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 2) { this.width = size.width; this.refresh(cx); } })
       .child(header)
       .child(h_flex().flex_1().min_h(0).overflow_hidden()
-        .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(stream)
+        .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(div().flex_1().min_h(0).child(this.streamView))
           .when(Boolean(activity), (el) => el.child(activity)).when(Boolean(dock), (el) => el.child(dock)).when(Boolean(leftover), (el) => el.child(leftover)).child(composer))
         .when(wide, (el) => el.child(this.side(t))));
   }
