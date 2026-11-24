@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const PROJECTS = join(homedir(), ".claude", "projects");
 const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "reader");
-const VERSION = 7; // bump when items change shape: older state is parsed again from the start
+const VERSION = 8; // bump when items change shape: older state is parsed again from the start
 const KEEP = 400; // items kept for a Reader that opens late
 const CHUNK = 8 * 2 ** 20; // read at most this much per run, so a huge first read stays under exec's limits
 const HEAD = 6; // tool result lines shown before folding
@@ -24,6 +24,11 @@ const DECISIONS = 30;
 
 const TICKET = /(?<![A-Za-z0-9-])([A-Z][A-Z0-9]+-\d+)(?![A-Za-z0-9])/g;
 const PR_URL = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
+const PR_REF = /(?<![\w./-])([A-Za-z][\w.-]*[A-Za-z0-9])#(\d+)\b/g;
+const PRS = 150; // PRs kept per chat (the sidebar shows the last 12; message text links to all)
+const GH_ORG = "ripplepoint"; // the owner of a repo named without a URL (as in mods/tasks/data.js)
+let repos = null;
+const localRepos = () => (repos ??= new Set((() => { try { return readdirSync(join(homedir(), "Desktop", "dev")); } catch { return []; } })()));
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
 const [sessionId, ...flags] = process.argv.slice(2);
@@ -61,9 +66,27 @@ const short = (s, n) => { const t = String(s ?? "").replace(/\s+/g, " ").trim();
 const textOf = (c) => (typeof c === "string" ? c : Array.isArray(c) ? c.filter((x) => x?.type === "text").map((x) => x.text).join("\n") : "");
 const addUnique = (list, v, max = 60) => { if (v && !list.includes(v)) { list.push(v); if (list.length > max) list.shift(); } };
 
+// A PR mentioned again moves to the end: the sidebar shows the last few.
+function notePr(url, repo, number) {
+  delete state.agg.prs[url];
+  state.agg.prs[url] = { repo, number, url };
+  const keys = Object.keys(state.agg.prs);
+  if (keys.length > PRS) delete state.agg.prs[keys[0]];
+}
+
 function touch(text) {
   for (const m of String(text).matchAll(TICKET)) if (!/^(UTF|ISO|SHA|RFC|TLS|HTTP|CVE)-/.test(m[1])) addUnique(state.agg.tickets, m[1]);
-  for (const m of String(text).matchAll(PR_URL)) state.agg.prs[m[0]] = { repo: m[2], number: Number(m[3]), url: m[0] };
+  for (const m of String(text).matchAll(PR_URL)) {
+    notePr(m[0], m[2], Number(m[3]));
+    (state.owners ??= {})[m[2]] = m[1];
+  }
+  // Agents mostly write "RP_25_Backend#1678", not the URL. Only names of known repos count (a
+  // folder in ~/Desktop/dev or a repo seen in a URL), so "BE#1671" or "step#2" stay out.
+  for (const m of String(text).matchAll(PR_REF)) {
+    const owner = state.owners?.[m[1]] ?? (localRepos().has(m[1]) ? GH_ORG : null);
+    if (!owner) continue;
+    notePr(`https://github.com/${owner}/${m[1]}/pull/${m[2]}`, m[1], Number(m[2]));
+  }
 }
 
 // The open question a reply ends on, if any:
@@ -131,7 +154,7 @@ function take(line) {
   const t = e.timestamp ?? null;
   if (e.type === "custom-title" && e.customTitle) state.title = e.customTitle;
   else if (e.type === "ai-title" && e.aiTitle && !state.title) state.title = e.aiTitle;
-  if (e.type === "pr-link" && e.prUrl) { state.agg.prs[e.prUrl] = { repo: (e.prRepository ?? "").split("/").pop(), number: e.prNumber, url: e.prUrl }; return; }
+  if (e.type === "pr-link" && e.prUrl) { notePr(e.prUrl, (e.prRepository ?? "").split("/").pop(), e.prNumber); return; }
   if (e.type === "system") {
     if (e.subtype === "compact_boundary") push({ k: "sys", kind: "compact", t, text: `Conversation compacted · ${Math.round((e.compactMetadata?.preTokens ?? 0) / 1000)}k tokens · ${e.compactMetadata?.trigger ?? ""}` });
     else if (e.subtype === "away_summary" && e.content) push({ k: "recap", t, text: String(e.content).replace(/\s*\(disable recaps in \/config\)\s*$/, "") });

@@ -868,7 +868,7 @@ export default class Reader extends View {
     const head = (text, n) => h_flex().justify_between().text_size(10.5).font_weight(700).text_color(t.dim).child(text.toUpperCase()).child(n === undefined ? "" : String(n));
     const decisions = [...(this.agg.decisions ?? [])].reverse().slice(0, 8);
     const running = Object.entries(this.agg.running ?? {});
-    const prs = Object.values(this.agg.prs ?? {}).slice(-6);
+    const prs = Object.values(this.agg.prs ?? {}).slice(-12).reverse(); // newest mention first
     const tickets = (this.agg.tickets ?? []).slice(-6);
     const files = (this.agg.files ?? []).slice(-8);
     const chip = (id, text, color, href) => div().id(id).px(6).rounded(5).bg(t.raised).border_1().border_color(t.border).text_size(11)
