@@ -245,8 +245,13 @@ export default class Reader extends View {
 
   // Covers the terminal the first time it shows, and mirrors the terminal's screen while Claude
   // waits on a prompt that lives only there (a permission, a multiple-choice question).
+  // A sent message not seen in the transcript after 2 minutes stops showing as "sending".
+  pendingExpired(m) { return Date.now() - Date.parse(m.t) >= 120000; }
+
   async tick(cx) {
     if (!this.isShown()) return;
+    // load() runs only when the transcript grows: expire here too, or a row can stay forever.
+    if (this.pending.some((m) => this.pendingExpired(m))) { this.pending = this.pending.filter((m) => !this.pendingExpired(m)); this.refresh(cx); }
     await this.readUsage(cx);
     const me = this.myPane();
     if (!this.zoomedOnce && me) {
@@ -403,9 +408,14 @@ export default class Reader extends View {
       if (first) { this.session = session; this.usage = null; this.usageText = null;this.shown = SHOWN; this.open.clear(); this.full = new Set(); }
       this.items = data.replaced ? data.items : this.items.concat(data.items).slice(-1200);
       // A slash command arrives as a command row with no arguments ("/pr-review"), not as a message.
-      const said = new Set(data.items.filter((x) => x.k === "user" || x.kind === "cmd").map((x) => x.text.trim()));
-      const arrived = (m) => said.has(m.text.trim()) || (m.text.startsWith("/") && said.has(m.text.trim().split(/\s+/)[0]));
-      this.pending = this.pending.filter((m) => !arrived(m) && Date.now() - Date.parse(m.t) < 120000);
+      // Text left in Claude's input box joins the message ("got with option 1actually ..."), so a
+      // message that ends with the sent text counts as arrived too.
+      const said = data.items.filter((x) => x.k === "user" || x.kind === "cmd").map((x) => x.text.trim());
+      const arrived = (m) => {
+        const text = m.text.trim();
+        return said.some((s) => s === text || s.endsWith(text)) || (text.startsWith("/") && said.includes(text.split(/\s+/)[0]));
+      };
+      this.pending = this.pending.filter((m) => !arrived(m) && !this.pendingExpired(m));
       this.agg = data.agg;
       this.waiting = data.waiting ?? this.waiting;
       this.title = data.title;
