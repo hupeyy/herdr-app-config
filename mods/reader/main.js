@@ -504,6 +504,25 @@ export default class Reader extends View {
 
   // Links open inside herdr: a PR or Jira ticket as a tab of the Tasks board (as the sidebar cards
   // do, through its "tasks.request"), any other page in a herdr browser tab.
+  // A touched file opens as a file tab (mod file-view) in this chat's space, rooted at its git
+  // repo and listing all the repo's changes, or selects the tab that already shows it.
+  async openFile(path) {
+    const abs = path.replaceAll("/", "\\");
+    const dir = abs.replace(/\\[^\\]+$/, "");
+    const r = await exec("git", ["-C", dir, "rev-parse", "--show-toplevel"]).catch(() => null);
+    const top = r?.code === 0 ? r.stdout.trim().replaceAll("/", "\\") : "";
+    const root = top && abs.toLowerCase().startsWith(`${top.toLowerCase()}\\`) ? abs.slice(0, top.length) : dir;
+    const file = abs.slice(root.length + 1).replaceAll("\\", "/");
+    const tab = panes().find((p) => p.terminal === this.terminal)?.tab;
+    const space = spaces().find((s) => s.tabs.some((x) => x.id === tab)) ?? spaces().find((s) => s.active);
+    if (!space) return;
+    const tabs = shared("file.tabs") ?? {};
+    const same = panes().find((p) => p.mod === "file-view" && space.tabs.some((x) => x.id === p.tab)
+      && tabs[p.pane]?.root?.toLowerCase() === root.toLowerCase() && tabs[p.pane]?.file === file);
+    if (same) run("tab.select", { id: same.tab });
+    else run("tab.new", { space: space.id, name: file.split("/").pop(), mod: "file-view", props: { root, file, changes: true } });
+  }
+
   openLink(href) {
     const pr = href.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/);
     const ticket = href.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/);
@@ -907,7 +926,8 @@ export default class Reader extends View {
       .child(h_flex().flex_wrap().gap(4)
         .children(prs.map((p, i) => chip(`pr-${i}`, `${p.repo}#${p.number}`, t.accent, p.url)))
         .children(tickets.map((k, i) => chip(`tk-${i}`, k, t.ansi4, this.ticketUrl(k))))
-        .children(files.map((f, i) => chip(`f-${i}`, base(f), t.ansi6, null).tooltip(f))));
+        .children(files.map((f, i) => chip(`f-${i}`, base(f), t.ansi6, null).tooltip(`${f}\nOpen with its repo's changes`)
+          .cursor_pointer().on_click(() => this.openFile(f)))));
   }
 
   // Repaints this view and the retained message list.

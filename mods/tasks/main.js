@@ -531,7 +531,7 @@ export default class Tasks extends View {
       ...(withAuthor ? [myReviewBadge(t, pr, "glyph")] : []),
       reviewBadge(t, pr),
     ]);
-    // One header per list, with a repo label above each repo's rows once they span more than one.
+    // One header per list, with a repo label above each repo's rows (even one repo: a PR names no repo otherwise).
     const repoLabel = (id, repo) => div().id(`${id}-repo-${repo}`).px(8).pt(6).h(22).flex_none().text_size(11).text_color(t.dim).child(repo);
     const list = (id, label, prs, tone, withAuthor) => {
       if (!prs.length) return [];
@@ -539,7 +539,7 @@ export default class Tasks extends View {
       return [
         this.header(t, id, label, prs.length, tone),
         ...(this.folded.has(id) ? [] : repos.flatMap((repo) => [
-          ...(repos.length > 1 ? [repoLabel(id, repo)] : []),
+          repoLabel(id, repo),
           ...prs.filter((p) => p.repo === repo).map(prRow(id, withAuthor)),
         ])),
       ];

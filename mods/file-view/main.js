@@ -35,26 +35,35 @@ const git = (cwd, args) => exec("git", ["--no-optional-locks", "-c", "core.fsmon
 // porcelain XY -> one VS Code letter.
 const letter = (xy) => (xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M");
 
-// Git marks for everything under root, keyed by root-relative path with "/" (and its folders).
+// Git marks for everything under root, keyed by root-relative path with "/" (and its folders),
+// and the changed files themselves ({ rel, mark }, in git's order).
 async function statusUnder(root) {
   const top = await git(root, ["rev-parse", "--show-toplevel"]);
-  if (top?.code !== 0) return {};
+  if (top?.code !== 0) return { marks: {}, files: [] };
   const status = await git(root, ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--", "."]);
-  if (status?.code !== 0) return {};
+  if (status?.code !== 0) return { marks: {}, files: [] };
   const base = norm(top.stdout.trim());
   const here = norm(root.replace(/[\\/]+$/, ""));
-  const marks = {};
+  const marks = {}, files = [];
   for (const entry of status.stdout.split("\0").filter(Boolean)) {
-    const abs = `${base}\\${norm(entry.slice(3))}`;
-    if (!abs.startsWith(`${here}\\`)) continue;
-    const rel = abs.slice(here.length + 1).replaceAll("\\", "/");
+    // Keep the path's own case for display; norm() only for the prefix test.
+    const path = `${top.stdout.trim().replaceAll("/", "\\")}\\${entry.slice(3).replaceAll("/", "\\")}`;
+    if (!norm(path).startsWith(`${here}\\`)) continue;
+    const rel = path.slice(here.length + 1).replaceAll("\\", "/");
     const m = letter(entry.slice(0, 2));
     marks[rel] = m;
+    files.push({ rel, mark: m });
     // A folder takes its children's mark, as VS Code dots a folder holding changes.
     const parts = rel.split("/");
     for (let i = 1; i < parts.length; i++) marks[parts.slice(0, i).join("/")] ??= m;
   }
-  return marks;
+  return { marks, files };
+}
+
+// The file as HEAD has it, or null (new, untracked, or not in git).
+async function headText(root, rel) {
+  const r = await git(root, ["show", `HEAD:./${rel}`]);
+  return r?.code === 0 ? r.stdout : null;
 }
 
 // The file's mark and its diff against HEAD ("" when unchanged or untracked).
@@ -100,9 +109,14 @@ export default class FileView extends View {
     this.entries = new Map(); // rel folder ("" = root) -> entries; loaded only when the tree shows
     this.open = new Set([""]);
     this.marks = {};
-    this.tree = !props()?.file;
+    this.files = []; // changed files under root (the Changes list)
+    // The left side lists the changed files ("changes", props.changes: the Reader opens it so) or
+    // the folder tree ("folder").
+    this.side = props()?.changes ? "changes" : "folder";
+    this.tree = !props()?.file || this.side === "changes";
     this.pane = props()?.pane ?? null;
-    this.mode = "file"; // "file" | "diff"
+    this.mode = "file"; // "file" (modified, editable) | "diff" | "original" (HEAD, read-only)
+    this.base = null; // EditorState of the HEAD text, made when Original is first shown
     this.diff = [];
     this.mark = null;
     this.stale = false; // the file changed on disk while you had unsaved edits
@@ -115,7 +129,30 @@ export default class FileView extends View {
 
   showTree(cx) {
     this.load("", cx);
-    cx.spawn(async (cx) => { this.marks = await statusUnder(this.root); cx.notify(); });
+    cx.spawn(async (cx) => { await this.restatus(); cx.notify(); });
+  }
+
+  async restatus() {
+    const s = await statusUnder(this.root);
+    this.marks = s.marks;
+    this.files = s.files;
+  }
+
+  // Original: the HEAD text in a read-only editor, loaded on first use for this file.
+  showOriginal(cx) {
+    this.mode = "original";
+    if (this.base?.file === this.file) return;
+    const rel = this.file;
+    cx.spawn(async (cx) => {
+      const text = await headText(this.root, rel);
+      if (this.file !== rel) return;
+      const t = theme(), ext = rel.includes(".") ? rel.split(".").pop().toLowerCase() : "txt";
+      this.base?.state?.release();
+      this.base = { file: rel, state: text === null ? null : EditorState.new({ language: LANG[ext] ?? ext, value: text, readonly: true,
+        font_family: settings().font_family, font_size: 12.5,
+        syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } }) };
+      cx.notify();
+    });
   }
 
   load(rel, cx) {
@@ -140,6 +177,7 @@ export default class FileView extends View {
   show(rel, cx) {
     this.code?.release(); this.code = null; this.file = rel; this.original = null; this.fileError = null;
     this.stale = false; this.diff = []; this.mark = null; this.mode = "file";
+    this.base?.state?.release(); this.base = null;
     cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(join(this.root, rel));
@@ -152,6 +190,25 @@ export default class FileView extends View {
       } catch { if (this.file === rel) this.fileError = "Cannot open this file (too large or unreadable)."; }
       finally { cx.notify(); }
       await this.refreshChanges(rel, cx, true);
+      // The watch follows only this file's folder: refresh the list on each pick instead.
+      if (this.tree) { await this.restatus(); cx.notify(); }
+    });
+  }
+
+  // The Changes list: every changed file under root, its folder dimmed after its name.
+  changeRows(t) {
+    const light = isLight(t.background);
+    if (!this.files.length) return [div().px(10).py(8).text_size(12).text_color(t.dim).child("No changes against HEAD.")];
+    return this.files.map(({ rel, mark }) => {
+      const name = rel.split("/").pop(), dir = rel.slice(0, -name.length - 1);
+      const tint = markColor(t, mark);
+      return h_flex().id(`fc-${rel}`).h(24).flex_none().px(8).gap(6).items_center().rounded(6).text_size(12.5)
+        .cursor_pointer().when(this.file === rel, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover)).tooltip(rel)
+        .on_click((_e, cx) => { if (this.file !== rel) this.show(rel, cx); })
+        .child(image(fileIcon(name, light)).w(15).h(15).flex_none())
+        .child(div().flex_none().max_w(160).truncate().text_color(tint ?? t.foreground).child(name))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(dir))
+        .child(div().flex_none().text_size(11).font_semibold().text_color(tint).child(mark));
     });
   }
 
@@ -162,6 +219,7 @@ export default class FileView extends View {
     this.diff = diff ? diffRows(diff) : [];
     if (opening && this.diff.length) this.mode = "diff";
     if (!this.diff.length && this.mode === "diff") this.mode = "file";
+    if (this.base?.file === rel) { this.base.state?.release(); this.base = null; if (this.mode === "original") this.showOriginal(cx); } // HEAD may have moved (a commit)
     cx.notify();
   }
 
@@ -179,7 +237,7 @@ export default class FileView extends View {
           const target = norm(join(this.root, rel));
           if (batch.some((p) => norm(p) === target || norm(p) === norm(dir))) await this.reloadFromDisk(rel, cx);
         }
-        if (this.tree) this.marks = await statusUnder(this.root);
+        if (this.tree) await this.restatus();
         cx.notify();
       }
     });
@@ -281,14 +339,19 @@ export default class FileView extends View {
     const adds = this.diff.filter((r) => r.kind === "add").length, dels = this.diff.filter((r) => r.kind === "del").length;
     const seg = (id, label, on, action) => div().id(id).px(9).h(22).flex().items_center().rounded(5).cursor_pointer()
       .bg(on ? t.selected : t.background).text_color(on ? t.foreground : t.muted).hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { action(); cx.notify(); }).child(label);
+      .on_click((_e, cx) => { action(cx); cx.notify(); }).child(label);
     return h_flex().id("file-view").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_color(t.foreground)
       .on_key_down((e, cx) => {
         if (e.keystroke === "cmd-s" || e.keystroke === "ctrl-s") { this.save(cx); cx.stop_propagation(); }
       })
-      .when(this.tree, (el) => el.child(v_flex().id("fv-tree").w(260).flex_none().h_full().min_h(0).border_r(1).border_color(t.border)
-        .child(div().px(12).h(34).flex_none().flex().items_center().truncate().text_size(11.5).font_medium().text_color(t.dim).child(this.root))
-        .child(v_flex().id("fv-rows").flex_1().min_h(0).px(4).pb(6).overflow_y_scrollbar().children(this.rows(t, "", 0, [])))))
+      .when(this.tree, (el) => el.child(v_flex().id("fv-tree").w(280).flex_none().h_full().min_h(0).border_r(1).border_color(t.border)
+        .child(h_flex().px(8).h(34).flex_none().gap(6).items_center().text_size(11.5)
+          .child(h_flex().flex_none().gap(2).p(2).rounded(7).border_1().border_color(t.border)
+            .child(seg("fv-side-changes", `Changes ${this.files.length}`, this.side === "changes", () => { this.side = "changes"; }))
+            .child(seg("fv-side-folder", "Folder", this.side === "folder", (cx) => { this.side = "folder"; this.load("", cx); })))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.dim).tooltip(this.root).child(this.root.split(/[\\/]/).pop())))
+        .child(v_flex().id("fv-rows").flex_1().min_h(0).px(4).pb(6).overflow_y_scrollbar()
+          .children(this.side === "changes" ? this.changeRows(t) : this.rows(t, "", 0, [])))))
       .child(v_flex().flex_1().min_w(0).h_full().min_h(0)
         .child(h_flex().px(12).h(34).flex_none().gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
           .child(div().id("fv-tree-toggle").p(3).rounded(5).flex_none().text_color(t.dim).cursor_pointer()
@@ -298,9 +361,11 @@ export default class FileView extends View {
           .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, isLight(t.background))).w(14).h(14).flex_none()))
           .child(div().flex_1().min_w(0).truncate().text_color(tint ?? (this.file ? t.foreground : t.dim)).child(this.file ?? "Pick a file"))
           .when(Boolean(this.mark), (el) => el.child(div().flex_none().font_semibold().text_color(tint).tooltip("Git status").child(this.mark)))
-          .when(this.diff.length > 0, (el) => el.child(h_flex().gap(2).p(2).rounded(7).border_1().border_color(t.border)
-            .child(seg("fv-mode-file", "File", this.mode === "file", () => { this.mode = "file"; }))
-            .child(seg("fv-mode-diff", `Changes +${adds} −${dels}`, this.mode === "diff", () => { this.mode = "diff"; }))))
+          // Original (HEAD, read-only) | Changes (the diff) | Modified (the file now, editable).
+          .when(this.diff.length > 0 || this.mark === "D", (el) => el.child(h_flex().gap(2).p(2).rounded(7).border_1().border_color(t.border)
+            .child(seg("fv-mode-original", "Original", this.mode === "original", (cx) => this.showOriginal(cx)))
+            .when(this.diff.length > 0, (el) => el.child(seg("fv-mode-diff", `Changes +${adds} −${dels}`, this.mode === "diff", () => { this.mode = "diff"; })))
+            .child(seg("fv-mode-file", "Modified", this.mode === "file", () => { this.mode = "file"; }))))
           .when(dirty, (el) => el.child(div().text_color(t.dim).child("unsaved"))
             .child(div().id("fv-save").px(10).h(24).flex().items_center().rounded(6).bg(t.solid).text_color(t.solid_foreground)
               .cursor_pointer().on_click((_e, cx) => this.save(cx)).child("Save  ctrl-s"))))
@@ -310,7 +375,9 @@ export default class FileView extends View {
             .hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.takeDisk(cx)).child("Load the disk version"))))
         .child(div().flex_1().min_h(0)
           .when(this.mode === "diff" && this.diff.length > 0, (el) => el.child(this.diffView(t)))
-          .when(this.mode !== "diff" && Boolean(this.code), (el) => el.child(Editor.new(this.code).size_full()))
-          .when(this.mode !== "diff" && !this.code, (el) => el.child(div().p(14).text_size(12.5).text_color(t.dim).child(this.fileError ?? (this.file ? "Loading…" : "Choose a file on the left."))))));
+          .when(this.mode === "original", (el) => el.child(this.base?.state ? Editor.new(this.base.state).size_full()
+            : div().p(14).text_size(12.5).text_color(t.dim).child(this.base ? "This file is new: HEAD has no version of it." : "Loading…")))
+          .when(this.mode === "file" && Boolean(this.code), (el) => el.child(Editor.new(this.code).size_full()))
+          .when(this.mode === "file" && !this.code, (el) => el.child(div().p(14).text_size(12.5).text_color(t.dim).child(this.fileError ?? (this.file ? "Loading…" : "Choose a file on the left."))))));
   }
 }
