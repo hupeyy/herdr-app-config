@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const PROJECTS = join(homedir(), ".claude", "projects");
 const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "reader");
-const VERSION = 5; // bump when items change shape: older state is parsed again from the start
+const VERSION = 7; // bump when items change shape: older state is parsed again from the start
 const KEEP = 400; // items kept for a Reader that opens late
 const CHUNK = 8 * 2 ** 20; // read at most this much per run, so a huge first read stays under exec's limits
 const HEAD = 6; // tool result lines shown before folding
@@ -98,7 +98,21 @@ function lastQuestionOf(text) {
     return null;
   }
   const sentence = last.replace(/^([-*]|\d+[.)])\s+/, "").split(/(?<=[.!])\s+/).filter((s) => s.includes("?")).pop() ?? last;
-  return { text: short(endsAsking ? sentence : asking[0].q, 240), numbered: asking.length >= 2 || asking.some((x) => x.options.length) ? asking : [] };
+  const numberedOut = asking.length >= 2 || asking.some((x) => x.options.length) ? asking : [];
+  // "Which one do you want, or both?" is no yes/no question: offer the reply's last numbered list
+  // (each item's bold lead, else its start), plus "Both" when the question names it.
+  if (endsAsking && !numberedOut.length && /^(which|what|how|where|who|when|why)\b|\bor\b/i.test(sentence)) {
+    const items = lines.map((l) => l.match(/^\**(\d+)[.)]\**\s+(.+)$/)).filter(Boolean);
+    const from = items.map((m) => m[1]).lastIndexOf("1");
+    const list = from >= 0 ? items.slice(from) : [];
+    const choices = list.length >= 2 ? list.map((m) => {
+      const lead = m[2].match(/^\*\*(.+?)\*\*/)?.[1];
+      return { n: Number(m[1]), send: m[1], label: short(clean(lead ?? m[2]).replace(/[.:]$/, ""), 140) };
+    }) : [];
+    if (choices.length && /\bboth\b/i.test(sentence)) choices.push({ n: choices.length + 1, send: "both", label: "Both" });
+    return { text: short(sentence, 240), open: true, choices, numbered: [] };
+  }
+  return { text: short(endsAsking ? sentence : asking[0].q, 240), numbered: numberedOut };
 }
 
 function toolSummary(name, input = {}) {
@@ -130,6 +144,12 @@ function take(line) {
   if (e.isSidechain) return; // a subagent's own steps live in its own file
   const content = e.message?.content;
   if (e.type === "assistant") {
+    // The context size, as the status line shows it: everything the last turn sent the model.
+    const u = e.message?.usage;
+    if (u && e.message.model !== "<synthetic>") {
+      state.model = e.message.model;
+      state.ctx = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    }
     for (const c of Array.isArray(content) ? content : []) {
       if (c.type === "text" && c.text?.trim()) {
         push({ k: "asst", t, text: c.text });
@@ -241,7 +261,7 @@ state.items = state.items.concat(items).slice(-KEEP);
 mkdirSync(STATE_DIR, { recursive: true });
 writeFileSync(statePath, JSON.stringify(state));
 console.log(JSON.stringify({
-  session: sessionId, title: state.title, reset, path,
+  session: sessionId, title: state.title, reset, path, model: state.model ?? null, ctx: state.ctx ?? null,
   items: full || reset ? state.items : items,
   replaced: full || reset,
   agg: state.agg,

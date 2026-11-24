@@ -51,6 +51,12 @@ const TOKEN = new RegExp([
 // texts are drawn again on every change, so results are kept by text.
 const TOKEN_CACHE = new Map();
 const KINDS = ["", "code", "bold", "link", "url", "ticket", "pr", "path", "good", "bad", "num"];
+// "claude-opus-5-5" -> "Opus 5.5"; other ids show as they are.
+function modelName(id) {
+  const m = String(id).match(/^claude-([a-z]+)-(\d+)-(\d+)/);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}` : String(id);
+}
+
 function tokens(text) {
   const hit = TOKEN_CACHE.get(text);
   if (hit) return hit;
@@ -165,6 +171,10 @@ export default class Reader extends View {
     this.agg = { decisions: [], running: {}, prs: {}, tickets: [], files: [] };
     this.waiting = { question: null, ask: null };
     this.title = null;
+    this.model = null;
+    this.ctx = null;
+    this.usage = null;
+    this.usageText = null;
     this.session = null;
     this.path = null;
     this.shown = SHOWN;
@@ -173,6 +183,8 @@ export default class Reader extends View {
     this.picks = {}; // numbered question -> "yes" | "no"
     this.sentAt = 0;
     this.width = 0;
+    this.height = 0;
+    this.plan = null;
     this.scroll = ScrollHandle.new();
     this.follow = true;
     this.full = new Set(); // messages already drawn in full (see renderStream)
@@ -197,10 +209,35 @@ export default class Reader extends View {
     return panes().find((p) => p.mod === "reader" && p.tab === tab) ?? null;
   }
 
+  // The chat's model and context window, from what the status line saved for this session
+  // (claude/statusline.mjs). The transcript has no window size, so it is the fallback only.
+  async readUsage(cx) {
+    if (!this.session) return;
+    const text = await readTextFile(`${appHome()}/data/reader/status/${this.session}.json`).catch(() => null);
+    if (!text || text === this.usageText) return;
+    this.usageText = text;
+    try { this.usage = JSON.parse(text); } catch { return; }
+    this.refresh(cx);
+  }
+
+  usageChip(t) {
+    const u = this.usage?.model ? this.usage : null;
+    const w = u?.context_window;
+    const used = w?.current_usage ? (w.current_usage.input_tokens ?? 0) + (w.current_usage.cache_read_input_tokens ?? 0) + (w.current_usage.cache_creation_input_tokens ?? 0) : this.ctx ?? 0;
+    const size = w?.context_window_size;
+    const pct = w?.used_percentage ?? (size ? Math.round((used / size) * 100) : null);
+    const k = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+    const name = u?.model?.display_name ?? modelName(u?.model?.id ?? this.model);
+    return div().id("usage").flex_none().text_size(11).text_color(pct >= 80 ? t.blocked : t.dim)
+      .tooltip(`${u?.model?.id ?? this.model} · ${used.toLocaleString()} tokens in context${size ? ` of ${size.toLocaleString()}` : ""}`)
+      .child(size ? `${name} · ${k(used)} / ${k(size)} (${pct}%)` : `${name} · ${k(used)}`);
+  }
+
   // Covers the terminal the first time it shows, and mirrors the terminal's screen while Claude
   // waits on a prompt that lives only there (a permission, a multiple-choice question).
   async tick(cx) {
     if (!this.isShown()) return;
+    await this.readUsage(cx);
     const me = this.myPane();
     if (!this.zoomedOnce && me) {
       this.zoomedOnce = true;
@@ -213,8 +250,19 @@ export default class Reader extends View {
       const r = await exec("hc", ["read", this.terminal, "--lines", "0"]).catch(() => null);
       const lines = (r?.stdout ?? "").split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
       this.screen = lines.slice(-60);
+      await this.readPlan(lines);
       this.refresh(cx);
-    } else if (this.screen) { this.screen = null; this.refresh(cx); }
+    } else if (this.screen) { this.screen = null; this.plan = null; this.refresh(cx); }
+  }
+
+  // The plan dialog is taller than the terminal, so Claude Code redraws the whole screen and
+  // clears the scrollback: the plan's top can't be scrolled to there. Its footer names the plan
+  // file ("ctrl+g to edit in Notepad · ~\.claude\plans\x.md"); the dock shows that file.
+  async readPlan(lines) {
+    const m = lines.join("\n").match(/[\\/]\.claude[\\/]plans[\\/]([\w.-]+\.md)/);
+    if (!m) { this.plan = null; return; }
+    const text = await readTextFile(`${home()}/.claude/plans/${m[1]}`).catch(() => null);
+    this.plan = text ? { name: m[1], text } : null;
   }
 
   async sendInput(cx, force) {
@@ -342,7 +390,7 @@ export default class Reader extends View {
       const r = await exec("node", [`${appHome()}/mods/reader/parse.mjs`, session, ...(first ? ["--full"] : [])], { timeout: 60000 });
       const data = JSON.parse(r.stdout || "{}");
       if (data.missing || data.error) return;
-      if (first) { this.session = session; this.shown = SHOWN; this.open.clear(); this.full = new Set(); }
+      if (first) { this.session = session; this.usage = null; this.usageText = null;this.shown = SHOWN; this.open.clear(); this.full = new Set(); }
       this.items = data.replaced ? data.items : this.items.concat(data.items).slice(-1200);
       // A slash command arrives as a command row with no arguments ("/pr-review"), not as a message.
       const said = new Set(data.items.filter((x) => x.k === "user" || x.kind === "cmd").map((x) => x.text.trim()));
@@ -351,6 +399,8 @@ export default class Reader extends View {
       this.agg = data.agg;
       this.waiting = data.waiting ?? this.waiting;
       this.title = data.title;
+      this.model = data.model;
+      this.ctx = data.ctx;
       if (data.path && data.path !== this.path) { this.path = data.path; this.watch(cx); }
       if ((first || data.items.length) && this.follow) this.toBottom = true;
       this.refresh(cx);
@@ -723,8 +773,11 @@ export default class Reader extends View {
           if (/^type something/i.test(prompt.options[i].label)) this.showTerminal(true);
         };
         const showScreen = this.open.has("dock-screen");
-        return frame(prompt.ask || this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
-          ...prompt.context.map((l, j) => div().id(`pc-${j}`).text_size(12).text_color(t.muted).child(l)),
+        const plan = this.plan;
+        return frame(plan ? "Claude wrote a plan" : prompt.ask || this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
+          ...(plan ? [v_flex().id("plan").max_h(Math.max(200, this.height * 0.6)).overflow_y_scroll().p(10).rounded(6)
+            .bg(t.background).border_1().border_color(t.border).child(this.rich(t, plan.text, "plan"))] : []),
+          ...(plan ? [] : prompt.context).map((l, j) => div().id(`pc-${j}`).text_size(12).text_color(t.muted).child(l)),
           div().text_size(13).font_weight(600).text_color(t.foreground).child(prompt.question),
           ...prompt.options.map((o, i) => h_flex().id(`po-${o.n}`).gap(10).items_start().w_full().px(10).py(7).rounded(7).cursor_pointer()
             .border_1().border_color(o.current ? t.accent : t.input).bg(t.background).hover((st) => st.border_color(t.accent).bg(t.hover))
@@ -787,6 +840,17 @@ export default class Reader extends View {
           .child(div().flex_1().min_w(0).truncate().font_family("Cascadia Mono").text_size(11.5).text_color(t.muted).child(draft))
           .child(btn("edit", "Reply in chat", false, () => this.goToChat()))
           .child(btn("send", "Send answers", ready, (_e, cx) => { if (ready) this.send(draft, cx); })),
+      ]);
+    }
+    if (q.open) {
+      return frame("Claude is waiting on you", [
+        this.inline(t, q.text, "dq-text"),
+        ...(q.choices ?? []).map((o) => h_flex().id(`co-${o.n}`).gap(8).items_center().px(8).py(5).rounded(6).cursor_pointer()
+          .border_1().border_color(t.input).bg(t.background).hover((st) => st.border_color(t.accent))
+          .on_click((_e, cx) => this.send(o.send, cx))
+          .child(div().flex_none().text_color(t.accent).font_weight(700).child(String(o.n)))
+          .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(o.label))),
+        h_flex().gap(6).child(btn("reply", "Reply in chat", true, () => this.goToChat())),
       ]);
     }
     return frame("Claude is waiting on you", [
@@ -885,6 +949,7 @@ export default class Reader extends View {
     const header = h_flex().id("hdr").flex_none().h(34).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.chrome)
       .child(div().flex_none().text_size(12).font_weight(700).text_color(t.accent).child("Reader"))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(this.title ?? pane?.title ?? ""))
+      .when(Boolean(this.usage?.model ?? this.model), (el) => el.child(this.usageChip(t)))
       .child(div().flex_none().text_size(11).text_color(status === "working" ? t.working : status === "blocked" ? t.blocked : t.dim).child(status ?? ""))
       .child(div().id("follow").flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
         .bg(this.follow ? t.selected : t.chrome).text_color(this.follow ? t.foreground : t.dim)
@@ -923,7 +988,7 @@ export default class Reader extends View {
         .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.sendInput(cx)).child("Send"));
 
     return v_flex().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_size(12.5).text_color(t.foreground)
-      .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 2) { this.width = size.width; this.refresh(cx); } })
+      .on_size_change((size, cx) => { this.height = size.height; if (Math.abs(size.width - this.width) > 2) { this.width = size.width; this.refresh(cx); } })
       .child(header)
       .child(h_flex().flex_1().min_h(0).overflow_hidden()
         .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(div().flex_1().min_h(0).child(this.streamView))
