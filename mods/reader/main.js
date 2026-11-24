@@ -344,8 +344,10 @@ export default class Reader extends View {
       if (data.missing || data.error) return;
       if (first) { this.session = session; this.shown = SHOWN; this.open.clear(); this.full = new Set(); }
       this.items = data.replaced ? data.items : this.items.concat(data.items).slice(-1200);
-      const said = new Set(data.items.filter((x) => x.k === "user").map((x) => x.text.trim()));
-      this.pending = this.pending.filter((m) => !said.has(m.text.trim()) && Date.now() - Date.parse(m.t) < 120000);
+      // A slash command arrives as a command row with no arguments ("/pr-review"), not as a message.
+      const said = new Set(data.items.filter((x) => x.k === "user" || x.kind === "cmd").map((x) => x.text.trim()));
+      const arrived = (m) => said.has(m.text.trim()) || (m.text.startsWith("/") && said.has(m.text.trim().split(/\s+/)[0]));
+      this.pending = this.pending.filter((m) => !arrived(m) && Date.now() - Date.parse(m.t) < 120000);
       this.agg = data.agg;
       this.waiting = data.waiting ?? this.waiting;
       this.title = data.title;
