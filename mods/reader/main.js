@@ -195,7 +195,8 @@ export default class Reader extends View {
     this.input.on("submit", (_e, cx) => this.sendInput(cx));
     this.input.on("paste_other", (_e, cx) => this.pasteImage(cx));
     this.handle = cx.focus_handle();
-    this.pressAt = null; // where a press in the message list started (copyOnSelect)
+    this.pressAt = null; // where a press in the message list started (noteSelection)
+    this.selected = false; // a drag or double-click in the messages left text selected
     this.pending = []; // messages sent but not in the transcript yet
     this.screen = null; // the terminal's last lines while a prompt waits there
     this.zoomedOnce = false;
@@ -244,12 +245,14 @@ export default class Reader extends View {
         .child(div().text_size(11).font_weight(600).text_color(pct >= 50 ? fill : t.muted).child(`${pct}%`)));
   }
 
-  // Ctrl+C as in the terminal: stops Claude while it works, else clears the message box. A
-  // selection in the box still copies; message text copies on release instead (copyOnSelect).
+  // Ctrl+C as in the terminal: with a selection it copies, else it stops Claude while it works,
+  // else clears the message box. A selection in the box is read directly; one in the messages
+  // cannot be, so a drag or double-click there counts as one until the next press (selected).
+  // Passing the key on lets the window's own Ctrl+C binding (shell_root::Copy) copy it.
   ctrlC(e, cx) {
     if (e.keystroke !== "ctrl-c") return;
     const r = this.input.selected_range();
-    if (r && r.start !== r.end) return;
+    if (this.selected || (r && r.start !== r.end)) return;
     const status = panes().find((p) => p.terminal === this.terminal)?.status;
     if (status === "working") { exec("hc", ["interrupt", this.terminal]); this.sentAt = 0; }
     else if (this.input.value()) this.input.set_value("");
@@ -259,14 +262,14 @@ export default class Reader extends View {
   }
 
   // Copy on select, like herdr's terminals: a drag or a double/triple click in the message list
-  // copies what it selected on release. The selection lives in the shell, so its own Copy action
-  // copies it; a plain click (no drag) leaves the clipboard alone.
-  copyOnSelect(e) {
+  // leaves text selected, and copy-key.ps1 presses Ctrl+C in the herdr window so its own binding
+  // copies it (ctrlC lets that key through while selected). Mods cannot copy the selection
+  // themselves: they cannot read it, and window.dispatch_action runs herdr commands only.
+  noteSelection(e) {
     const d = this.pressAt;
     this.pressAt = null;
-    const dragged = d && Math.hypot(e.position.x - d.x, e.position.y - d.y) > 3;
-    if (!dragged && (e.click_count ?? 1) < 2) return;
-    try { window.dispatch_action("shell_root::Copy"); } catch {}
+    this.selected = Boolean(d && Math.hypot(e.position.x - d.x, e.position.y - d.y) > 3) || (e.click_count ?? 1) >= 2;
+    if (this.selected) exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `${appHome()}/mods/reader/copy-key.ps1`]).catch(() => {});
   }
 
   // A sent message not seen in the transcript after 2 minutes stops showing as "sending".
@@ -1071,7 +1074,7 @@ export default class Reader extends View {
         .child(div().id("lo-edit").px(10).py(3).rounded(6).text_size(12).cursor_pointer().text_color(t.muted)
           .on_click((_e, cx) => { this.leftover = null; this.input.focus(); this.refresh(cx); })
           .child("Edit"))) : null;
-    const composer = h_flex().id("composer").flex_none().gap(8).items_end().px(10).py(8).border_t(1).border_color(t.border).bg(t.surface)
+    const composer = h_flex().id("composer").on_mouse_down("left", () => { this.selected = false; }).flex_none().gap(8).items_end().px(10).py(8).border_t(1).border_color(t.border).bg(t.surface)
       .child(div().flex_1().min_w(0).rounded(7).border_1().border_color(t.input).bg(t.background).p(4)
         .child(Textarea.new(this.input).w_full().text_size(12.5)))
       .child(div().id("send").flex_none().px(12).py(5).rounded(7).text_size(12.5).font_weight(600).cursor_pointer()
@@ -1081,7 +1084,7 @@ export default class Reader extends View {
       .on_size_change((size, cx) => { this.height = size.height; if (Math.abs(size.width - this.width) > 2) { this.width = size.width; this.refresh(cx); } })
       .child(header)
       .child(h_flex().flex_1().min_h(0).overflow_hidden()
-        .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(div().id("stream-wrap").flex_1().min_h(0).on_mouse_down("left", (e) => { this.pressAt = e.position; }).on_mouse_up("left", (e) => this.copyOnSelect(e)).child(this.streamView))
+        .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(div().id("stream-wrap").flex_1().min_h(0).on_mouse_down("left", (e) => { this.pressAt = e.position; this.selected = false; }).on_mouse_up("left", (e) => this.noteSelection(e)).child(this.streamView))
           .when(Boolean(activity), (el) => el.child(activity)).when(Boolean(dock), (el) => el.child(dock)).when(Boolean(leftover), (el) => el.child(leftover)).child(composer))
         .when(wide, (el) => el.child(this.side(t))));
   }
