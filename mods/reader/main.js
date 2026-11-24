@@ -194,6 +194,8 @@ export default class Reader extends View {
     this.input.set_auto_grow(1, 8);
     this.input.on("submit", (_e, cx) => this.sendInput(cx));
     this.input.on("paste_other", (_e, cx) => this.pasteImage(cx));
+    this.handle = cx.focus_handle();
+    this.pressAt = null; // where a press in the message list started (copyOnSelect)
     this.pending = []; // messages sent but not in the transcript yet
     this.screen = null; // the terminal's last lines while a prompt waits there
     this.zoomedOnce = false;
@@ -242,11 +244,36 @@ export default class Reader extends View {
         .child(div().text_size(11).font_weight(600).text_color(pct >= 50 ? fill : t.muted).child(`${pct}%`)));
   }
 
-  // Covers the terminal the first time it shows, and mirrors the terminal's screen while Claude
-  // waits on a prompt that lives only there (a permission, a multiple-choice question).
+  // Ctrl+C as in the terminal: stops Claude while it works, else clears the message box. A
+  // selection in the box still copies; message text copies on release instead (copyOnSelect).
+  ctrlC(e, cx) {
+    if (e.keystroke !== "ctrl-c") return;
+    const r = this.input.selected_range();
+    if (r && r.start !== r.end) return;
+    const status = panes().find((p) => p.terminal === this.terminal)?.status;
+    if (status === "working") { exec("hc", ["interrupt", this.terminal]); this.sentAt = 0; }
+    else if (this.input.value()) this.input.set_value("");
+    else return;
+    cx.stop_propagation();
+    this.refresh(cx);
+  }
+
+  // Copy on select, like herdr's terminals: a drag or a double/triple click in the message list
+  // copies what it selected on release. The selection lives in the shell, so its own Copy action
+  // copies it; a plain click (no drag) leaves the clipboard alone.
+  copyOnSelect(e) {
+    const d = this.pressAt;
+    this.pressAt = null;
+    const dragged = d && Math.hypot(e.position.x - d.x, e.position.y - d.y) > 3;
+    if (!dragged && (e.click_count ?? 1) < 2) return;
+    try { window.dispatch_action("shell_root::Copy"); } catch {}
+  }
+
   // A sent message not seen in the transcript after 2 minutes stops showing as "sending".
   pendingExpired(m) { return Date.now() - Date.parse(m.t) >= 120000; }
 
+  // Covers the terminal the first time it shows, and mirrors the terminal's screen while Claude
+  // waits on a prompt that lives only there (a permission, a multiple-choice question).
   async tick(cx) {
     if (!this.isShown()) return;
     // load() runs only when the transcript grows: expire here too, or a row can stay forever.
@@ -1050,11 +1077,11 @@ export default class Reader extends View {
       .child(div().id("send").flex_none().px(12).py(5).rounded(7).text_size(12.5).font_weight(600).cursor_pointer()
         .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.85)).on_click((_e, cx) => this.sendInput(cx)).child("Send"));
 
-    return v_flex().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_size(12.5).text_color(t.foreground)
+    return v_flex().id("reader").track_focus(this.handle).on_key_down((e, cx) => this.ctrlC(e, cx)).size_full().min_h(0).overflow_hidden().bg(t.background).text_size(12.5).text_color(t.foreground)
       .on_size_change((size, cx) => { this.height = size.height; if (Math.abs(size.width - this.width) > 2) { this.width = size.width; this.refresh(cx); } })
       .child(header)
       .child(h_flex().flex_1().min_h(0).overflow_hidden()
-        .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(div().flex_1().min_h(0).child(this.streamView))
+        .child(v_flex().flex_1().h_full().min_w(0).min_h(0).overflow_hidden().child(div().id("stream-wrap").flex_1().min_h(0).on_mouse_down("left", (e) => { this.pressAt = e.position; }).on_mouse_up("left", (e) => this.copyOnSelect(e)).child(this.streamView))
           .when(Boolean(activity), (el) => el.child(activity)).when(Boolean(dock), (el) => el.child(dock)).when(Boolean(leftover), (el) => el.child(leftover)).child(composer))
         .when(wide, (el) => el.child(this.side(t))));
   }
