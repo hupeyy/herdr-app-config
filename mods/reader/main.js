@@ -77,6 +77,16 @@ function tokenize(text) {
 // just above it, its numbered options with the one the cursor is on, and the keys its footer
 // offers ("Esc to cancel · Tab to amend"). Null when the screen holds no numbered options.
 const OPTION = /^\s*([\u276f\u203a>])?\s*(\d+)\.\s+(.+?)\s*$/;
+// What a message's Copy puts on the clipboard: code fence lines (```bash) dropped and inline
+// `code` unwrapped. Backticks inside a fenced block stay: they are the script's own (bash `cmd`).
+function plainCopy(text) {
+  let fenced = false;
+  return String(text ?? "").split("\n").flatMap((line) => {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; return []; }
+    return [fenced ? line : line.replace(/`([^`\n]+)`/g, "$1")];
+  }).join("\n");
+}
+
 function readPrompt(lines) {
   if (!lines?.length) return null;
   let end = lines.length - 1;
@@ -519,13 +529,13 @@ export default class Reader extends View {
       .child(done ? "Copied" : label);
   }
 
-  // Under a message: Copy (the raw text) and Select text, which swaps the colored words for a
-  // selectable text view of the same message (each colored word is its own element, so the
-  // colored view cannot be selected across words).
+  // Under a message: Copy (the text without markdown backticks) and Select text, which swaps the
+  // colored words for a selectable text view of the same message (each colored word is its own
+  // element, so the colored view cannot be selected across words).
   actions(t, id, text) {
     const selecting = this.selecting.has(id);
     return h_flex().id(`${id}-act`).justify_end().gap(4)
-      .child(this.copyBtn(t, id, text))
+      .child(this.copyBtn(t, id, plainCopy(text)))
       .child(div().id(`${id}-sel-btn`).flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
         .text_color(selecting ? t.accent : t.dim).hover((st) => st.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => { selecting ? this.selecting.delete(id) : this.selecting.add(id); this.refresh(cx); })
