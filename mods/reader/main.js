@@ -228,9 +228,19 @@ export default class Reader extends View {
     const pct = w?.used_percentage ?? (size ? Math.round((used / size) * 100) : null);
     const k = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
     const name = u?.model?.display_name ?? modelName(u?.model?.id ?? this.model);
-    return div().id("usage").flex_none().text_size(11).text_color(pct >= 80 ? t.blocked : t.dim)
+    // A pill: the model in the accent color, then the context used with a small fill bar that
+    // turns the working color past half and the blocked color from 80%.
+    const fill = pct >= 80 ? t.blocked : pct >= 50 ? t.working : t.accent;
+    return h_flex().id("usage").flex_none().h(22).px(8).gap(7).items_center().rounded(11)
+      .bg(t.raised).border_1().border_color(pct >= 80 ? t.blocked : t.border)
       .tooltip(`${u?.model?.id ?? this.model} · ${used.toLocaleString()} tokens in context${size ? ` of ${size.toLocaleString()}` : ""}`)
-      .child(size ? `${name} · ${k(used)} / ${k(size)} (${pct}%)` : `${name} · ${k(used)}`);
+      .child(div().text_size(11.5).font_weight(700).text_color(t.accent).child(name))
+      .child(div().w(1).h(12).bg(t.border))
+      .child(div().text_size(11.5).font_weight(600).text_color(t.foreground).child(size ? `${k(used)} / ${k(size)}` : k(used)))
+      .when(pct !== null, (el) => el
+        .child(div().w(40).h(5).rounded_full().bg(t.border).overflow_hidden()
+          .child(div().h_full().rounded_full().bg(fill).w(Math.max(2, Math.min(40, (40 * pct) / 100)))))
+        .child(div().text_size(11).font_weight(600).text_color(pct >= 50 ? fill : t.muted).child(`${pct}%`)));
   }
 
   // Covers the terminal the first time it shows, and mirrors the terminal's screen while Claude
