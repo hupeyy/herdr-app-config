@@ -179,7 +179,6 @@ export default class Reader extends View {
     this.path = null;
     this.shown = SHOWN;
     this.open = new Set(); // expanded tool rows, long replies and summaries
-    this.selecting = new Set(); // messages shown as selectable text (see actions)
     this.picks = {}; // numbered question -> "yes" | "no"
     this.sentAt = 0;
     this.width = 0;
@@ -632,20 +631,31 @@ export default class Reader extends View {
       .child(done ? "Copied" : label);
   }
 
-  // Under a message: Copy (the text without markdown backticks) and Select text, which swaps the
-  // colored words for a selectable text view of the same message (each colored word is its own
-  // element, so the colored view cannot be selected across words).
+  // Under a message: Copy (the text without markdown backticks).
   actions(t, id, text) {
-    const selecting = this.selecting.has(id);
-    return h_flex().id(`${id}-act`).justify_end().gap(4)
-      .child(this.copyBtn(t, id, plainCopy(text)))
-      .child(div().id(`${id}-sel-btn`).flex_none().px(6).rounded(4).text_size(11).cursor_pointer()
-        .text_color(selecting ? t.accent : t.dim).hover((st) => st.bg(t.hover).text_color(t.foreground))
-        .on_click((_e, cx) => { selecting ? this.selecting.delete(id) : this.selecting.add(id); this.refresh(cx); })
-        .child(selecting ? "Done selecting" : "Select text"));
+    return h_flex().id(`${id}-act`).justify_end().gap(4).child(this.copyBtn(t, id, plainCopy(text)));
   }
 
-  selectable(id, text) { return TextView.markdown(`${id}-sel`, text).selectable(true); }
+  // Messages are selectable markdown text. PR numbers and ticket keys become links that open in
+  // herdr (openLink); the word-by-word colored view could not be selected across words.
+  selectable(id, text) {
+    return TextView.markdown(`${id}-sel`, this.linkify(text)).selectable(true).on_link_click((url) => this.openLink(url));
+  }
+
+  // "#1678", "RP_25_Backend#1678" and "RIPPLE-4614" as markdown links, outside code and links.
+  linkify(text) {
+    let fence = false;
+    return text.split("\n").map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return line; }
+      if (fence) return line;
+      return line.split(/(`[^`]*`)/).map((part, i) => (i % 2 ? part : part
+        .replace(/(?<![[\w/#.-])((?:[A-Za-z][\w.-]*[A-Za-z0-9])?#\d+)\b(?!\]\()/g, (m) => { const u = this.prUrl(m); return u ? `[${m}](${u})` : m; })
+        .replace(/(?<![[\w/.-])([A-Z][A-Z0-9]+-\d+)\b(?!\]\()/g, (m) => {
+          const u = /^(UTF|ISO|SHA|RFC|TLS|HTTP|CVE)-/.test(m) ? null : this.ticketUrl(m);
+          return u ? `[${m}](${u})` : m;
+        }))).join("");
+    }).join("\n");
+  }
 
   // An open tool row: the whole command (8 lines, then "Show all"), then the first output lines.
   // Both are selectable text, so a command can be copied by hand too.
@@ -690,24 +700,25 @@ export default class Reader extends View {
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.foreground).font_weight(700).child("You")).child(clock(it.t)))
         .when(pics.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6)
           .children(pics.map((p, k) => image(p).id(`${id}-img${k}`).max_w(220).max_h(160).rounded(6).border_1().border_color(t.border)))))
-        .child(this.selecting.has(id) ? this.selectable(id, it.text) : this.inline(t, it.text.length > 1200 ? `${it.text.slice(0, 1200)}…` : it.text, `${id}-x`))
+        .child(this.selectable(id, it.text.length > 1200 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1200)}…` : it.text))
+        .when(it.text.length > 1200 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
+          .on_click((_e, cx) => { this.open.add(`${id}-all`); this.refresh(cx); }).child("Show all")))
         .child(this.actions(t, id, it.text));
     }
     if (it.k === "peer") {
       return v_flex().id(id).gap(3).px(14).py(9).border_l(3).border_color(t.accent).bg(t.surface).border_b(1)
         .child(h_flex().gap(8).text_size(11).text_color(t.dim).child(div().text_color(t.accent).font_weight(700).child(it.from)).child(it.pasted ? "pasted by you" : "message from another agent").child(clock(it.t)))
-        .child(this.selecting.has(id) ? this.selectable(id, it.text) : this.inline(t, it.text.length > 1500 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1500)}…` : it.text, `${id}-x`))
-        .when(!this.selecting.has(id) && it.text.length > 1500 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
+        .child(this.selectable(id, it.text.length > 1500 && !this.open.has(`${id}-all`) ? `${it.text.slice(0, 1500)}…` : it.text))
+        .when(it.text.length > 1500 && !this.open.has(`${id}-all`), (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
           .on_click((_e, cx) => { this.open.add(`${id}-all`); this.refresh(cx); }).child("Show all")))
         .child(this.actions(t, id, it.text));
     }
     if (it.k === "asst") {
       const long = it.text.length > LONG && !this.open.has(id);
       const text = long ? `${it.text.slice(0, LONG)}…` : it.text;
-      const selecting = this.selecting.has(id);
       return v_flex().id(id).gap(4).px(14).py(7)
-        .child(selecting ? this.selectable(id, it.text) : this.rich(t, text, `${id}-r`))
-        .when(long && !selecting, (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
+        .child(this.selectable(id, text))
+        .when(long, (el) => el.child(div().id(`${id}-more`).text_size(11.5).text_color(t.accent).cursor_pointer()
           .on_click((_e, cx) => { this.open.add(id); this.refresh(cx); }).child(`Show more (${(it.text.length - LONG).toLocaleString()} characters)`)))
         .child(this.actions(t, id, it.text));
     }
@@ -746,7 +757,7 @@ export default class Reader extends View {
         return v_flex().id(id).px(14).py(5).text_size(11.5).text_color(t.dim).cursor_pointer()
           .on_click((_e, cx) => { isOpen ? this.open.delete(id) : this.open.add(id); this.refresh(cx); })
           .child(`Summary of the earlier conversation (${it.text.split(/\s+/).length.toLocaleString()} words) · ${isOpen ? "hide" : "show"}`)
-          .when(isOpen, (el) => el.child(div().pt(6).child(this.rich(t, it.text, `${id}-r`))));
+          .when(isOpen, (el) => el.child(div().pt(6).child(this.selectable(id, it.text))));
       }
       const glyph = { compact: "✂", task: it.ok === false ? "✗" : "✓", cmd: "›", interrupt: "■" }[it.kind] ?? "·";
       const tone = it.kind === "task" ? (it.ok === false ? t.blocked : t.done) : t.dim;
@@ -827,7 +838,7 @@ export default class Reader extends View {
         const plan = this.plan;
         return frame(plan ? "Claude wrote a plan" : prompt.ask || this.waiting.ask ? "Claude asks you to choose" : "Claude needs your permission", [
           ...(plan ? [v_flex().id("plan").max_h(Math.max(200, this.height * 0.6)).overflow_y_scroll().p(10).rounded(6)
-            .bg(t.background).border_1().border_color(t.border).child(this.rich(t, plan.text, "plan"))] : []),
+            .bg(t.background).border_1().border_color(t.border).child(this.selectable("plan", plan.text))] : []),
           ...(plan ? [] : prompt.context).map((l, j) => div().id(`pc-${j}`).text_size(12).text_color(t.muted).child(l)),
           div().text_size(13).font_weight(600).text_color(t.foreground).child(prompt.question),
           ...prompt.options.map((o, i) => h_flex().id(`po-${o.n}`).gap(10).items_start().w_full().px(10).py(7).rounded(7).cursor_pointer()
