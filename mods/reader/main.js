@@ -494,12 +494,24 @@ export default class Reader extends View {
       let el = div().id(`${id}-${n++}`).text_color(c[tok.kind] ?? c.text);
       if (tok.kind === "code") el = el.px(4).rounded(4).bg(t.raised).font_family("Cascadia Mono").text_size(11.5);
       if (tok.kind === "ticket" || tok.kind === "pr") el = el.font_weight(600);
-      if (href) el = el.cursor_pointer().hover((s) => s.underline()).tooltip(href).on_click((_e, cx) => cx.open_url(href));
+      if (href) el = el.cursor_pointer().hover((s) => s.underline()).tooltip(href).on_click(() => this.openLink(href));
       add(el.child(shown), open);
       open = true;
     }
     return h_flex().id(id).flex_wrap().gap_x(4).gap_y(1).min_w(0)
       .children(units.map((u, i) => (u.length === 1 ? u[0] : h_flex().id(`${id}-u${i}`).flex_none().children(u))));
+  }
+
+  // Links open inside herdr: a PR or Jira ticket as a tab of the Tasks board (as the sidebar cards
+  // do, through its "tasks.request"), any other page in a herdr browser tab.
+  openLink(href) {
+    const pr = href.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/);
+    const ticket = href.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/);
+    const target = pr ? { kind: "pr", url: pr[0] } : ticket ? { kind: "ticket", key: ticket[1], url: href } : null;
+    if (!target) { exec("node", [`${appHome()}/hx/hx.mjs`, "browser", "open", href]); return; }
+    const open = Date.now() - (shared("tasks.board")?.at ?? 0) < 40000; // the board's lease
+    setShared("tasks.request", { target: { targets: [target] }, at: Date.now() });
+    if (!open) run("mod.open", { name: "tasks" });
   }
 
   prUrl(text) {
@@ -882,7 +894,7 @@ export default class Reader extends View {
     const tickets = (this.agg.tickets ?? []).slice(-6);
     const files = (this.agg.files ?? []).slice(-8);
     const chip = (id, text, color, href) => div().id(id).px(6).rounded(5).bg(t.raised).border_1().border_color(t.border).text_size(11)
-      .text_color(color).font_family("Cascadia Mono").when(Boolean(href), (el) => el.cursor_pointer().tooltip(href).on_click((_e, cx) => cx.open_url(href))).child(text);
+      .text_color(color).font_family("Cascadia Mono").when(Boolean(href), (el) => el.cursor_pointer().tooltip(href).on_click(() => this.openLink(href))).child(text);
     return v_flex().id("side").w(220).h_full().flex_none().gap(10).p(10).border_l(1).border_color(t.border).bg(t.chrome).overflow_y_scroll()
       .child(head("Decisions in this chat", this.agg.decisions?.length ?? 0))
       .child(v_flex().gap(6).children(decisions.length ? decisions.map((d, i) => v_flex().id(`d-${i}`).text_size(11.5)
